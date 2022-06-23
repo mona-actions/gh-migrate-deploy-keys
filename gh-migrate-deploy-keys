@@ -1,0 +1,460 @@
+#!/usr/bin/env bash
+################################################################################
+################################################################################
+####### Migrate GitHub Deploy Keys #############################################
+################################################################################
+################################################################################
+
+# LEGEND:
+# This script is used by the gh command line to help migrate GitHub Deploy Keys
+# of repositories. If no inpput file is provided, it will migrate the keys from
+# all repositories in the source Organization to the destination Organization.
+# If an input file is provided, it will migrate the keys from the repositories
+# in the list to the source Organization.
+
+#
+# PREREQS:
+# You need to have the following to run this script successfully:
+# - GitHub Personal Access Token with a scope of "repos" and access to the organization(s) that will be updated.
+# - Either the name of the organizations to be migrated, or a file containing the names of the repositories to be updated
+# - jq installed on the machine running the query
+#
+# NOTES:
+# Input file should be in the format:
+# Repo_Name1
+# Repo_Name2
+# Repo_Name3
+#
+
+################################################################################
+#### Function PrintUsage #######################################################
+PrintUsage()
+{
+  cat <<EOM
+Usage: gh migrate-deploy-keys [options]
+
+Options:
+    -h, --help                    : Show script help
+    -d, --debug                   : Enable Debug logging
+    -i, --input                   : Set path to a file with a list of Org/Repo,visibility,template to update, one per line
+    -dt, --destination-token      :  Set Personal Access Token with repo scope to destination Organization
+    -st, --source-token           : Set Personal Access Token with repo scope to original Organization
+    -p, --repo-page-size          : Set the pagination size for the initial repository GraphQL query - defaults to 20
+                                    If a timeout occurs, reduce this value
+    
+    -so, --source-org             : Name of the source GitHub Organization to be analyzed
+    -do, --destination-org        : Name of the destination GitHub Organization to be updated
+
+Description:
+migrate-deploy-keys scans a source organization or input file for all repositories and gathers their deploy keys.
+  It then migrates the deploy key of all repositories from the source Organization to the destination organization.
+
+Example:
+  gh migrate-deploy-keys --source-org OriginalOrg --destination-org MyNewOrg --source-token ABCDEFG1234567 --destination-token 1234567ABCDEFG
+
+EOM
+  exit 0
+}
+####################################
+# Read in the parameters if passed #
+####################################
+PARAMS=""
+while (( "$#" )); do
+  case "$1" in
+    -h|--help)
+      PrintUsage;
+      ;;
+    -d|--debug)
+      DEBUG=true
+      shift
+      ;;
+    -dt|--destination-token)
+      DESTINATION_TOKEN=$2
+      shift 2
+      ;;
+    -st|--source-token)
+      SOURCE_TOKEN=$2
+      shift 2
+      ;;
+    -i|--input)
+      INPUT_FILE_NAME=$2
+      shift 2
+      ;;
+    -p|--repo-page-size)
+      REPO_PAGE_SIZE=$2
+      shift 2
+      ;;
+    -do|--destination-org)
+      DESTINATION_ORG_NAME=$2
+      shift 2
+      ;;
+    -so|--source-org)
+      SOURCE_ORG_NAME=$2
+      shift 2
+      ;;
+    --) # end argument parsing
+      shift
+      break
+      ;;
+    -*) # unsupported flags
+      echo "Error: Unsupported flag $1" >&2
+      exit 1
+      ;;
+    *) # preserve positional arguments
+  PARAMS="$PARAMS $1"
+  shift
+  ;;
+  esac
+done
+
+##################################################
+# Set positional arguments in their proper place #
+##################################################
+eval set -- "$PARAMS"
+
+############
+# Defaults #
+############
+REPO_PAGE_SIZE="${REPO_PAGE_SIZE:-100}" # Default to 100 if not passed
+SOURCE_END_CURSOR='null'                # Set to null, will be updated after call
+DESTINATION_END_CURSOR='null'           # Set to null, will be updated after call
+###########
+# GLOBALS #
+###########
+SOURCE_REPO_ARRAY=()      # Array of source repo names
+DESTINATION_REPO_ARRAY=() # Array of destination repo names
+UPDATE_REPO_ARRAY=()      # Array of repo names to update
+
+################################################################################
+############################ FUNCTIONS #########################################
+################################################################################
+################################################################################
+################################################################################
+#### Function DebugJQ ##########################################################
+DebugJQ() {
+  # If Debug is on, print it out...
+  if [[ ${DEBUG} == true ]]; then
+    echo "$1" | jq '.'
+  fi
+}
+################################################################################
+#### Function Debug ############################################################
+Debug() {
+  # If Debug is on, print it out...
+  if [[ ${DEBUG} == true ]]; then
+    echo "$1"
+  fi
+}
+################################################################################
+#### Function Header ###########################################################
+Header() {
+  echo ""
+  echo "######################################################"
+  echo "######################################################"
+  echo "########### GitHub Migrate Deploy keys ###############"
+  echo "######################################################"
+  echo "######################################################"
+  echo ""
+  echo "NOTE: This script is used by the gh command line to help migrate GitHub Deploy Keys"
+  echo "In order to do this, it will need to remove the deploy key from the"
+  echo "source organization repository and add it to the destination organization repository."
+  echo "There is some level of risk associated with this script, so please use it with caution."
+  echo ""
+
+  # Debug info
+  Debug "---- DEBUG ----"
+  Debug "Source Token:[${SOURCE_TOKEN}]"
+  Debug "Destination Token:[${DESTINATION_TOKEN}]"
+  Debug "Source Organization:[${SOURCE_ORG_NAME}]"
+  Debug "Destination Organization:[${DESTINATION_ORG_NAME}]"
+  Debug "Repo Page Size:[${REPO_PAGE_SIZE}]"
+  Debug "Input File:[${INPUT_FILE_NAME}]"
+  Debug "---- DEBUG ----"
+}
+################################################################################
+#### Function Footer ###########################################################
+Footer() {
+  #######################################
+  # Basic footer information and totals #
+  #######################################
+  echo ""
+  echo "######################################################"
+  echo "The script has completed"
+  echo "######################################################"
+  echo ""
+}
+################################################################################
+#### Function ValidateJQ #######################################################
+ValidateJQ() {
+  # Need to validate the machine has jq installed as we use it to do the parsing
+  # of all the json returns from GitHub
+
+  if ! jq --version &>/dev/null
+  then
+    echo "Failed to find jq in the path!"
+    echo "If this is a Mac, run command: brew install jq"
+    echo "If this is Debian, run command: sudo apt install jq"
+    echo "If this is Centos, run command: yum install jq"
+    echo "Once installed, please run this script again."
+    exit 1
+  fi
+}
+
+################################################################################
+#### Function GetAllSourceRepos ################################################
+GetAllSourceRepos() {
+  echo "Getting all source repos for:[${SOURCE_ORG_NAME}]"
+  Debug "SOURCE_END_CURSOR:[${SOURCE_END_CURSOR}]"
+
+  # Need to quote the string if its not null
+  SOURCE_END_CURSOR_STRING="${SOURCE_END_CURSOR}"
+  if [[ "${SOURCE_END_CURSOR}" != "null" ]]; then
+    SOURCE_END_CURSOR_STRING='\"'
+    SOURCE_END_CURSOR_STRING+="${SOURCE_END_CURSOR}"
+    SOURCE_END_CURSOR_STRING+='\"'
+  fi
+  # Need to quote the string
+  SOURCE_ORG_NAME_STRING='\"'
+  SOURCE_ORG_NAME_STRING+="${SOURCE_ORG_NAME}"
+  SOURCE_ORG_NAME_STRING+='\"'
+
+  # Get the data block from the GitHub API
+  DATA_BLOCK=$(curl --fail -s -X POST \
+    --url https://api.github.com/graphql \
+    -H 'Accept: application/vnd.github.starfire-preview+json' \
+    -H "Authorization: Bearer ${SOURCE_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"query\":\"query {organization(login: ${SOURCE_ORG_NAME_STRING}) {repositories(first: ${REPO_PAGE_SIZE}, after: ${SOURCE_END_CURSOR_STRING}) {nodes {nameWithOwner deployKeys(first: 100, after: null) {totalCount nodes {title key readOnly}}} totalCount pageInfo {hasNextPage endCursor}}}}\"}" 2>&1)
+
+  #######################
+  # Load the error code #
+  #######################
+  ERROR_CODE=$?
+
+  ##########################
+  # Check the shell return #
+  ##########################
+  if [ $ERROR_CODE -ne 0 ]; then
+    echo "ERROR! Failed to gather data from GitHub!"
+    exit 1
+  fi
+
+  # Get the next page and end cursor
+  NEXT_PAGE=$(echo "$DATA_BLOCK" | jq .[] | jq -r '.organization.repositories.pageInfo.hasNextPage')
+  SOURCE_END_CURSOR=$(echo "$DATA_BLOCK" | jq .[] | jq -r '.organization.repositories.pageInfo.endCursor')
+
+  # Debug info
+  Debug "DATA_BLOCK:[${DATA_BLOCK}]"
+  Debug "NEXT_PAGE:[${NEXT_PAGE}]"
+  Debug "SOURCE_END_CURSOR:[${SOURCE_END_CURSOR}]"
+
+  #############################################
+  # Parse all the repo data out of data block #
+  #############################################
+  ParseSourceRepoData "$DATA_BLOCK"
+
+  ########################################
+  # See if we need to loop for more data #
+  ########################################
+  if [ "$NEXT_PAGE" == "false" ]; then
+    # We have all the data, we can move on
+    echo "Gathered all data from source GitHub Organization"
+    echo "----------------------------------------------------"
+  elif [ "$NEXT_PAGE" == "true" ]; then
+    # We need to loop through GitHub to get all repos
+    echo "More pages of repos... Looping through data with new cursor:[$SOURCE_END_CURSOR]"
+    ######################################
+    # Call GetData again with new cursor #
+    ######################################
+    GetAllSourceRepos
+  else
+    # Failing to get this value means we didnt get a good response back from GitHub
+    # And it could be bad input from user, not enough access, or a bad token
+    # Fail out and have user validate the info
+    echo ""
+    echo "######################################################"
+    echo "ERROR! Failed response back from GitHub!"
+    echo "Please validate your PAT, Organization, and access levels!"
+    echo "######################################################"
+    exit 1
+  fi
+}
+################################################################################
+#### Function ParseSourceRepoData ##############################################
+ParseSourceRepoData() {
+  # Pull in the repos data block
+  PARSE_DATA=$1
+  # Convert the format to JSON
+  _jq() {
+    echo -n "${PARSE_DATA}" | base64 --decode | jq -r "${1}"
+  }
+
+  REPOS=$(echo "${PARSE_DATA}" | jq -r '.data.organization.repositories.nodes')
+  for REPO_DATA in $(echo -n "${REPOS}" | jq -r '.[] | @base64'); do
+    _jq() {
+    echo -n "${REPO_DATA}" | base64 --decode | jq -r "${1}"
+    }
+    # Build out the vars for the function
+    REPO_NAME=$(_jq '.nameWithOwner' | tr '[:upper:]' '[:lower:]')
+    DEPLOY_KEYS_COUNT=$(_jq '.deployKeys.totalCount')
+    # Debug info
+    Debug "REPO_NAME:[${REPO_NAME}]"
+    Debug "DEPLOY_KEYS_COUNT:[${DEPLOY_KEYS_COUNT}]"
+  done
+}
+################################################################################
+#### Function ValidateArgs #####################################################
+ValidateArgs() {
+  # Check if user has provided the required arguments
+  echo "----------------------------------------------------"
+  echo "Validating user input..."
+  
+  # Make lower case to prevent weird issues
+  DESTINATION_ORG_NAME=$(echo "${DESTINATION_ORG_NAME}" | tr '[:upper:]' '[:lower:]')
+  SOURCE_ORG_NAME=$(echo "${SOURCE_ORG_NAME}" | tr '[:upper:]' '[:lower:]')
+
+  # Check if user has passed input file
+  if [ -n "${INPUT_FILE_NAME}" ] || [ "${#INPUT_FILE_NAME}" -lt 1 ] 
+  && [ -z "${SOURCE_ORG_NAME}" ] && [ -z "${DESTINATION_ORG_NAME}" ] 
+  && [ -z "${DESTINATION_TOKEN}" ]; then
+    # user did not pass destination token, fail out
+    echo "ERROR! You must provide a destination token to update the Destination Organization!"
+    exit 1
+  fi
+
+  # Check we have all other vars if no input file
+  if [ -z "${INPUT_FILE_NAME}" ]; then
+    # We need both source and org vars
+    if [ -z "${SOURCE_ORG_NAME}" ] || [ -z "${SOURCE_TOKEN}" ] || [ -z "${DESTINATION_ORG_NAME}" ] || [ -z "${DESTINATION_TOKEN}" ]; then
+      echo "ERROR! You must provide [--destination-token] [--source-token] [--destination-org] [--source-org] to query and update!"
+      exit 1
+    fi
+  fi
+}
+################################################################################
+#### Function GenerateUpdateList ###############################################
+GenerateUpdateList() {
+  echo "----------------------------------------------------"
+  echo "Parsing all data and generating update list..."
+  # We now have all the data we need to generate the update list
+  # SOURCE_REPO_ARRAY=()      # Array of source repo names
+  # DESTINATION_REPO_ARRAY=() # Array of destination repo names
+  # UPDATE_REPO_ARRAY=()      # Array of repo names to update
+  #
+  # String format per item is:
+  # <org name>/<repo name>|<visibility>|<template>
+
+  # Loop through the destination repos and see if we have a match in the source repos
+  for DESTINATION_OBJECT in "${DESTINATION_REPO_ARRAY[@]}"; do
+    # Split the repo name and visibility
+    DESTINATION_REPO_STRING=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f1)
+    DESTINATION_ORG=$(echo "${DESTINATION_REPO_STRING}" | cut -d'/' -f1)
+    DESTINATION_REPO=$(echo "${DESTINATION_REPO_STRING}" | cut -d'/' -f2)
+    # Debug Info
+    Debug "DESTINATION_REPO_STRING:[${DESTINATION_REPO_STRING}]"
+    Debug "DESTINATION_ORG:[${DESTINATION_ORG}]"
+    Debug "DESTINATION_REPO:[${DESTINATION_REPO}]"
+    # Loop through the source repos and see if we have a match
+    for SOURCE_OBJECT in "${SOURCE_REPO_ARRAY[@]}"; do
+      # Split the repo name and visibility
+      SOURCE_REPO_STRING=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f1)
+      SOURCE_ORG=$(echo "${SOURCE_REPO_STRING}" | cut -d'/' -f1)
+      SOURCE_REPO=$(echo "${SOURCE_REPO_STRING}" | cut -d'/' -f2)
+      SOURCE_REPO_VISIBILITY=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f2)
+      SOURCE_REPO_TEMPLATE=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f3)
+      # Debug Info
+      Debug "SOURCE_OBJECT:[${SOURCE_OBJECT}]"
+      Debug "SOURCE_REPO_STRING:[${SOURCE_REPO_STRING}]"
+      Debug "SOURCE_ORG:[${SOURCE_ORG}]"
+      Debug "SOURCE_REPO:[${SOURCE_REPO}]"
+      Debug "SOURCE_REPO_VISIBILITY:[${SOURCE_REPO_VISIBILITY}]"
+      Debug "SOURCE_REPO_TEMPLATE:[${SOURCE_REPO_TEMPLATE}]"
+      # Check if the repo names match
+      if [ "${SOURCE_REPO}" == "${DESTINATION_REPO}" ]; then
+        # We have a match, update the UPDATE_REPO_ARRAY with the SOURCE_REPO_VISIBILITY and SOURCE_REPO_TEMPLATE
+        UPDATE_REPO_ARRAY+=("${DESTINATION_ORG}/${DESTINATION_REPO}|${SOURCE_REPO_VISIBILITY}|${SOURCE_REPO_TEMPLATE}")
+        echo "Adding:[${DESTINATION_ORG}/${DESTINATION_REPO}|${SOURCE_REPO_VISIBILITY}|${SOURCE_REPO_TEMPLATE}] to update array"
+      fi
+    done
+  done
+
+  # Debug info
+  Debug "---- DEBUG ----"
+  Debug "UPDATE_REPO_ARRAY:"
+  for LINE in  "${UPDATE_REPO_ARRAY[@]}"; do
+    Debug "${LINE}"
+  done
+}
+################################################################################
+############################## MAIN ############################################
+################################################################################
+
+##########
+# Header #
+##########
+Header
+
+#####################################
+# Validate we have enough arguments #
+#####################################
+ValidateArgs
+
+#########################
+# Validate JQ installed #
+#########################
+ValidateJQ
+
+#####################################
+# Check if were using an input file #
+#####################################
+if [[ -n "${INPUT_FILE_NAME}" ]]; then
+  # Read in the input file and parse the lines
+  while read -r line; do
+    #############################################
+    # Split the line into the org and repo name #
+    #############################################
+    REPO_NAME=$(echo "${line}" | tr '[:upper:]' '[:lower:]')
+
+    # Debug info
+    Debug "REPO_NAME:[${REPO_NAME}]"
+
+    #####################################
+    # Update the visibility of the repo #
+    #####################################
+    GetDeployKeys "${SOURCE_ORG_NAME}" "${REPO_NAME}"
+    DeleteDeployKeys "${SOURCE_ORG_NAME}" "${REPO_NAME}"
+    CreateDeployKeys "${DESTINATION_ORG_NAME}" "${REPO_NAME}"
+  done < "${INPUT_FILE_NAME}"
+else
+  #########################################
+  # Get the list of all repos in the orgs #
+  #########################################
+  GetAllSourceRepos
+  ###############################################################
+  # Loop through the repos and generate list of repos to update #
+  ###############################################################
+  #GenerateUpdateList
+  # Loop through the list of repos and update the visibility
+  # for OBJECT in "${UPDATE_REPO_ARRAY[@]}"; do
+  #   # Get the vars from the string
+  #   ORG_REPO=$(echo "${OBJECT}" | cut -d'|' -f1)
+  #   ORG=$(echo "${ORG_REPO}" | cut -d'/' -f1)
+  #   REPO=$(echo "${ORG_REPO}" | cut -d'/' -f2)
+  #   VISIBILITY=$(echo "${OBJECT}" | cut -d'|' -f2)
+  #   TEMPLATE=$(echo "${OBJECT}" | cut -d'|' -f3)
+  #   # Debug info
+  #   Debug "---- DEBUG ----"
+  #   Debug "OBJECT:[${OBJECT}]"
+  #   Debug "ORG_REPO:[${ORG_REPO}]"
+  #   Debug "ORG:[${ORG}]"
+  #   Debug "REPO:[${REPO}]"
+  #   Debug "VISIBILITY:[${VISIBILITY}]"
+  #   Debug "TEMPLATE:[${TEMPLATE}]"
+  #   Debug "---- DEBUG ----"
+  # done
+fi
+
+##########
+# Footer #
+##########
+Footer
