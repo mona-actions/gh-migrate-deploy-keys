@@ -124,7 +124,6 @@ GITHUB_API_URL='https://api.github.com' # Set to default GitHub API URL
 ###########
 SOURCE_REPO_ARRAY=()      # Array of source repo names
 DESTINATION_REPO_ARRAY=() # Array of destination repo names
-UPDATE_REPO_ARRAY=()      # Array of repo names to update
 
 ################################################################################
 ############################ FUNCTIONS #########################################
@@ -591,8 +590,8 @@ DeleteKeyFromRepo() {
   # Need to call the API to delete the github deploy key
   # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
   DELETE_CMD=$(curl --fail -s -X DELETE \
-    -H "Accept: application/vnd.github.v3+json" \ 
-    -H "Authorization: token <TOKEN>" \
+    -H "Accept: application/vnd.github.v3+json" \
+    -H "Authorization: token ${SOURCE_TOKEN}" \
     "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys/${KEY_ID}" 2>&1)
 
   # Check for errors
@@ -623,8 +622,8 @@ AddKeyToRepo() {
   # Need to call the API to add the github deploy key
   # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
   ADD_CMD=$(curl --fail -s -X POST \
-    -H "Accept: application/vnd.github.v3+json" \ 
-    -H "Authorization: token <TOKEN>" \
+    -H "Accept: application/vnd.github.v3+json" \
+    -H "Authorization: token ${DESTINATION_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"title\":\"${KEY_TITLE}\",\"key\":\"${KEY_VALUE}\"}" \
     "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys" 2>&1)
