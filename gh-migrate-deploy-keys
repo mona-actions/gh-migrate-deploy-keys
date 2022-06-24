@@ -118,6 +118,7 @@ eval set -- "$PARAMS"
 REPO_PAGE_SIZE="${REPO_PAGE_SIZE:-100}" # Default to 100 if not passed
 SOURCE_END_CURSOR='null'                # Set to null, will be updated after call
 DESTINATION_END_CURSOR='null'           # Set to null, will be updated after call
+GITHUB_API_URL='https://api.github.com' # Set to default GitHub API URL
 ###########
 # GLOBALS #
 ###########
@@ -199,7 +200,6 @@ ValidateJQ() {
     exit 1
   fi
 }
-
 ################################################################################
 #### Function GetAllSourceRepos ################################################
 GetAllSourceRepos() {
@@ -224,7 +224,7 @@ GetAllSourceRepos() {
     -H 'Accept: application/vnd.github.starfire-preview+json' \
     -H "Authorization: Bearer ${SOURCE_TOKEN}" \
     -H 'Content-Type: application/json' \
-    -d "{\"query\":\"query {organization(login: ${SOURCE_ORG_NAME_STRING}) {repositories(first: ${REPO_PAGE_SIZE}, after: ${SOURCE_END_CURSOR_STRING}) {nodes {nameWithOwner deployKeys(first: 100, after: null) {totalCount nodes {title key readOnly}}} totalCount pageInfo {hasNextPage endCursor}}}}\"}" 2>&1)
+    -d "{\"query\":\"query {organization(login: ${SOURCE_ORG_NAME_STRING}) {repositories(first: ${REPO_PAGE_SIZE}, after: ${SOURCE_END_CURSOR_STRING}) {nodes {nameWithOwner deployKeys(first: 100, after: null) {totalCount nodes {id title key readOnly}}} totalCount pageInfo {hasNextPage endCursor}}}}\"}" 2>&1)
 
   #######################
   # Load the error code #
@@ -295,11 +295,176 @@ ParseSourceRepoData() {
     echo -n "${REPO_DATA}" | base64 --decode | jq -r "${1}"
     }
     # Build out the vars for the function
-    REPO_NAME=$(_jq '.nameWithOwner' | tr '[:upper:]' '[:lower:]')
+    ORG_REPO_NAME=$(_jq '.nameWithOwner')
     DEPLOY_KEYS_COUNT=$(_jq '.deployKeys.totalCount')
     # Debug info
-    Debug "REPO_NAME:[${REPO_NAME}]"
+    Debug "ORG_REPO_NAME:[${ORG_REPO_NAME}]"
     Debug "DEPLOY_KEYS_COUNT:[${DEPLOY_KEYS_COUNT}]"
+
+    if [ "${DEPLOY_KEYS_COUNT}" -gt 0 ]; then
+      # We have deploy keys, lets get them
+      echo "Getting deploy keys for repo:[${ORG_REPO_NAME}]"
+      KEYS=$(echo "${PARSE_DATA}" | jq -r '.data.organization.repositories.nodes[] | select(.nameWithOwner == "'"${ORG_REPO_NAME}"'") | .deployKeys.nodes')
+      for KEY_DATA in $(echo -n "${KEYS}" | jq -r '.[] | @base64'); do
+        _jq() {
+        echo -n "${KEY_DATA}" | base64 --decode | jq -r "${1}"
+        }
+        # Build out the vars for the function
+        KEY_ID=$(_jq '.id')
+        KEY_TITLE=$(_jq '.title')
+        KEY_VALUE=$(_jq '.key')
+        KEY_READ_ONLY=$(_jq '.readOnly')
+        # Debug info
+        Debug "KEY_ID:[${KEY_ID}]"
+        Debug "KEY_TITLE:[${KEY_TITLE}]"
+        Debug "KEY_VALUE:[${KEY_VALUE}]"
+        Debug "KEY_READ_ONLY:[${KEY_READ_ONLY}]"
+        # Get the org repo name and make lowercase
+        ORG_REPO=$(echo "${ORG_REPO_NAME}" | tr '[:upper:]' '[:lower:]')
+        # Create string of all values to add to array
+        KEY_STRING="${ORG_REPO}|${KEY_ID}|${KEY_TITLE}|${KEY_VALUE}|${KEY_READ_ONLY}"
+        echo "Adding key:[${KEY_STRING}] to source array"
+        # Add the key to the source repo array
+        SOURCE_REPO_ARRAY+=("${KEY_STRING}")
+      done
+    fi
+  done
+}
+################################################################################
+#### Function GetAllDestinationRepos ###########################################
+GetAllDestinationRepos() {
+  echo "Getting all destination repos for:[${DESTINATION_ORG_NAME}]"
+  Debug "DESTINATION_END_CURSOR:[${DESTINATION_END_CURSOR}]"
+
+  # Need to quote the string if its not null
+  DESTINATION_END_CURSOR_STRING="${DESTINATION_END_CURSOR}"
+  if [[ "${DESTINATION_END_CURSOR}" != "null" ]]; then
+    DESTINATION_END_CURSOR_STRING='\"'
+    DESTINATION_END_CURSOR_STRING+="${DESTINATION_END_CURSOR}"
+    DESTINATION_END_CURSOR_STRING+='\"'
+  fi
+  # Need to quote the string
+  DESTINATION_ORG_NAME_STRING='\"'
+  DESTINATION_ORG_NAME_STRING+="${DESTINATION_ORG_NAME}"
+  DESTINATION_ORG_NAME_STRING+='\"'
+
+  # Get the data block from the GitHub API
+  DATA_BLOCK=$(curl --fail -s -X POST \
+    --url https://api.github.com/graphql \
+    -H 'Accept: application/vnd.github.starfire-preview+json' \
+    -H "Authorization: Bearer ${DESTINATION_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"query\":\"query {organization(login: ${DESTINATION_ORG_NAME_STRING}) {repositories(first: ${REPO_PAGE_SIZE}, after: ${DESTINATION_END_CURSOR_STRING}) {nodes {nameWithOwner deployKeys(first: 100, after: null) {totalCount nodes {id title key readOnly}}} totalCount pageInfo {hasNextPage endCursor}}}}\"}" 2>&1)
+
+  #######################
+  # Load the error code #
+  #######################
+  ERROR_CODE=$?
+
+  ##########################
+  # Check the shell return #
+  ##########################
+  if [ $ERROR_CODE -ne 0 ]; then
+    echo "ERROR! Failed to gather data from GitHub!"
+    exit 1
+  fi
+
+  # Get the next page and end cursor
+  NEXT_PAGE=$(echo "$DATA_BLOCK" | jq .[] | jq -r '.organization.repositories.pageInfo.hasNextPage')
+  DESTINATION_END_CURSOR=$(echo "$DATA_BLOCK" | jq .[] | jq -r '.organization.repositories.pageInfo.endCursor')
+
+  # Debug info
+  Debug "DATA_BLOCK:[${DATA_BLOCK}]"
+  Debug "NEXT_PAGE:[${NEXT_PAGE}]"
+  Debug "DESTINATION_END_CURSOR:[${DESTINATION_END_CURSOR}]"
+
+  #############################################
+  # Parse all the repo data out of data block #
+  #############################################
+  ParseDestinationRepoData "$DATA_BLOCK"
+
+  ########################################
+  # See if we need to loop for more data #
+  ########################################
+  if [ "$NEXT_PAGE" == "false" ]; then
+    # We have all the data, we can move on
+    echo "Gathered all data from destination GitHub Organization"
+    echo "----------------------------------------------------"
+  elif [ "$NEXT_PAGE" == "true" ]; then
+    # We need to loop through GitHub to get all repos
+    echo "More pages of repos... Looping through data with new cursor:[${DESTINATION_END_CURSOR}]"
+    ######################################
+    # Call GetData again with new cursor #
+    ######################################
+    GetAllDestinationRepos
+  else
+    # Failing to get this value means we didnt get a good response back from GitHub
+    # And it could be bad input from user, not enough access, or a bad token
+    # Fail out and have user validate the info
+    echo ""
+    echo "######################################################"
+    echo "ERROR! Failed response back from GitHub!"
+    echo "Please validate your PAT, Organization, and access levels!"
+    echo "######################################################"
+    exit 1
+  fi
+}
+################################################################################
+#### Function ParseDestinationRepoData #########################################
+ParseDestinationRepoData() {
+  # Pull in the repos data block
+  PARSE_DATA=$1
+  # Convert the format to JSON
+  _jq() {
+    echo -n "${PARSE_DATA}" | base64 --decode | jq -r "${1}"
+  }
+
+  REPOS=$(echo "${PARSE_DATA}" | jq -r '.data.organization.repositories.nodes')
+  for REPO_DATA in $(echo -n "${REPOS}" | jq -r '.[] | @base64'); do
+    _jq() {
+    echo -n "${REPO_DATA}" | base64 --decode | jq -r "${1}"
+    }
+    # Build out the vars for the function
+    ORG_REPO_NAME=$(_jq '.nameWithOwner')
+    DEPLOY_KEYS_COUNT=$(_jq '.deployKeys.totalCount')
+    # Debug info
+    Debug "ORG_REPO_NAME:[${ORG_REPO_NAME}]"
+    Debug "DEPLOY_KEYS_COUNT:[${DEPLOY_KEYS_COUNT}]"
+
+    if [ "${DEPLOY_KEYS_COUNT}" -gt 0 ]; then
+      # We have deploy keys, lets get them
+      echo "Getting deploy keys for repo:[${ORG_REPO_NAME}]"
+      KEYS=$(echo "${PARSE_DATA}" | jq -r '.data.organization.repositories.nodes[] | select(.nameWithOwner == "'"${ORG_REPO_NAME}"'") | .deployKeys.nodes')
+      for KEY_DATA in $(echo -n "${KEYS}" | jq -r '.[] | @base64'); do
+        _jq() {
+        echo -n "${KEY_DATA}" | base64 --decode | jq -r "${1}"
+        }
+        # Build out the vars for the function
+        KEY_ID=$(_jq '.id')
+        KEY_TITLE=$(_jq '.title')
+        KEY_VALUE=$(_jq '.key')
+        KEY_READ_ONLY=$(_jq '.readOnly')
+        # Debug info
+        Debug "KEY_ID:[${KEY_ID}]"
+        Debug "KEY_TITLE:[${KEY_TITLE}]"
+        Debug "KEY_VALUE:[${KEY_VALUE}]"
+        Debug "KEY_READ_ONLY:[${KEY_READ_ONLY}]"
+        # Get the org repo name and make lowercase
+        ORG_REPO=$(echo "${ORG_REPO_NAME}" | tr '[:upper:]' '[:lower:]')
+        # Create string of all values to add to array
+        KEY_STRING="${ORG_REPO}|${KEY_ID}|${KEY_TITLE}|${KEY_VALUE}|${KEY_READ_ONLY}"
+        echo "Adding key:[${KEY_STRING}] to source array"
+        # Add the key to the destination repo array
+        DESTINATION_REPO_ARRAY+=("${KEY_STRING}")
+      done
+    else
+      # Get the org repo name and make lowercase
+      ORG_REPO=$(echo "${ORG_REPO_NAME}" | tr '[:upper:]' '[:lower:]')
+      # create the string
+      KEY_STRING="${ORG_REPO}|N/A|N/A|N/A|N/A"
+      # Add the key to the destination repo array
+       DESTINATION_REPO_ARRAY+=("${KEY_STRING}")
+    fi
   done
 }
 ################################################################################
@@ -314,8 +479,8 @@ ValidateArgs() {
   SOURCE_ORG_NAME=$(echo "${SOURCE_ORG_NAME}" | tr '[:upper:]' '[:lower:]')
 
   # Check if user has passed input file
-  if [ -n "${INPUT_FILE_NAME}" ] || [ "${#INPUT_FILE_NAME}" -lt 1 ] 
-  && [ -z "${SOURCE_ORG_NAME}" ] && [ -z "${DESTINATION_ORG_NAME}" ] 
+  if [ -n "${INPUT_FILE_NAME}" ] || [ "${#INPUT_FILE_NAME}" -lt 1 ] \
+  && [ -z "${SOURCE_ORG_NAME}" ] && [ -z "${DESTINATION_ORG_NAME}" ] \
   && [ -z "${DESTINATION_TOKEN}" ]; then
     # user did not pass destination token, fail out
     echo "ERROR! You must provide a destination token to update the Destination Organization!"
@@ -335,55 +500,148 @@ ValidateArgs() {
 #### Function GenerateUpdateList ###############################################
 GenerateUpdateList() {
   echo "----------------------------------------------------"
-  echo "Parsing all data and generating update list..."
+  echo "Parsing all data and generating migration list..."
   # We now have all the data we need to generate the update list
   # SOURCE_REPO_ARRAY=()      # Array of source repo names
   # DESTINATION_REPO_ARRAY=() # Array of destination repo names
   # UPDATE_REPO_ARRAY=()      # Array of repo names to update
   #
   # String format per item is:
-  # <org name>/<repo name>|<visibility>|<template>
+  # ORG_NAME/REPO_NAME|KEY_ID|KEY_TITLE|KEY_VALUE|KEY_READ_ONLY
 
-  # Loop through the destination repos and see if we have a match in the source repos
-  for DESTINATION_OBJECT in "${DESTINATION_REPO_ARRAY[@]}"; do
+  # Loop through the source repos and see if we have a match
+  for SOURCE_OBJECT in "${SOURCE_REPO_ARRAY[@]}"; do
+    KEY_EXISTS=0
+    REPO_EXISTS=0
     # Split the repo name and visibility
-    DESTINATION_REPO_STRING=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f1)
-    DESTINATION_ORG=$(echo "${DESTINATION_REPO_STRING}" | cut -d'/' -f1)
-    DESTINATION_REPO=$(echo "${DESTINATION_REPO_STRING}" | cut -d'/' -f2)
+    SOURCE_REPO_STRING=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f1)
+    SOURCE_ORG=$(echo "${SOURCE_REPO_STRING}" | cut -d'/' -f1)
+    SOURCE_REPO=$(echo "${SOURCE_REPO_STRING}" | cut -d'/' -f2)
+    SOURCE_KEY_ID=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f2)
+    SOURCE_KEY_TITLE=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f3)
+    SOURCE_KEY_VALUE=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f4)
     # Debug Info
-    Debug "DESTINATION_REPO_STRING:[${DESTINATION_REPO_STRING}]"
-    Debug "DESTINATION_ORG:[${DESTINATION_ORG}]"
-    Debug "DESTINATION_REPO:[${DESTINATION_REPO}]"
-    # Loop through the source repos and see if we have a match
-    for SOURCE_OBJECT in "${SOURCE_REPO_ARRAY[@]}"; do
+    Debug "SOURCE_OBJECT:[${SOURCE_OBJECT}]"
+    Debug "SOURCE_REPO_STRING:[${SOURCE_REPO_STRING}]"
+    Debug "SOURCE_ORG:[${SOURCE_ORG}]"
+    Debug "SOURCE_REPO:[${SOURCE_REPO}]"
+    Debug "SOURCE_KEY_ID:[${SOURCE_KEY_ID}]"
+    Debug "SOURCE_KEY_TITLE:[${SOURCE_KEY_TITLE}]"
+    Debug "SOURCE_KEY_VALUE:[${SOURCE_KEY_VALUE}]"
+
+    # Loop through the destination repos and see if we have a match in the source repos
+    for DESTINATION_OBJECT in "${DESTINATION_REPO_ARRAY[@]}"; do
       # Split the repo name and visibility
-      SOURCE_REPO_STRING=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f1)
-      SOURCE_ORG=$(echo "${SOURCE_REPO_STRING}" | cut -d'/' -f1)
-      SOURCE_REPO=$(echo "${SOURCE_REPO_STRING}" | cut -d'/' -f2)
-      SOURCE_REPO_VISIBILITY=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f2)
-      SOURCE_REPO_TEMPLATE=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f3)
+      DESTINATION_REPO_STRING=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f1)
+      DESTINATION_ORG=$(echo "${DESTINATION_REPO_STRING}" | cut -d'/' -f1)
+      DESTINATION_REPO=$(echo "${DESTINATION_REPO_STRING}" | cut -d'/' -f2)
+      DESTINATION_KEY_ID=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f2)
+      DESTINATION_KEY_TITLE=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f3)
+      DESTINATION_KEY_VALUE=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f4)
       # Debug Info
-      Debug "SOURCE_OBJECT:[${SOURCE_OBJECT}]"
-      Debug "SOURCE_REPO_STRING:[${SOURCE_REPO_STRING}]"
-      Debug "SOURCE_ORG:[${SOURCE_ORG}]"
-      Debug "SOURCE_REPO:[${SOURCE_REPO}]"
-      Debug "SOURCE_REPO_VISIBILITY:[${SOURCE_REPO_VISIBILITY}]"
-      Debug "SOURCE_REPO_TEMPLATE:[${SOURCE_REPO_TEMPLATE}]"
-      # Check if the repo names match
+      Debug "DESTINATION_OBJECT:[${DESTINATION_OBJECT}]"
+      Debug "DESTINATION_REPO_STRING:[${DESTINATION_REPO_STRING}]"
+      Debug "DESTINATION_ORG:[${DESTINATION_ORG}]"
+      Debug "DESTINATION_REPO:[${DESTINATION_REPO}]"
+      Debug "DESTINATION_KEY_ID:[${DESTINATION_KEY_ID}]"
+      Debug "DESTINATION_KEY_TITLE:[${DESTINATION_KEY_TITLE}]"
+      Debug "DESTINATION_KEY_VALUE:[${DESTINATION_KEY_VALUE}]"
+
       if [ "${SOURCE_REPO}" == "${DESTINATION_REPO}" ]; then
-        # We have a match, update the UPDATE_REPO_ARRAY with the SOURCE_REPO_VISIBILITY and SOURCE_REPO_TEMPLATE
-        UPDATE_REPO_ARRAY+=("${DESTINATION_ORG}/${DESTINATION_REPO}|${SOURCE_REPO_VISIBILITY}|${SOURCE_REPO_TEMPLATE}")
-        echo "Adding:[${DESTINATION_ORG}/${DESTINATION_REPO}|${SOURCE_REPO_VISIBILITY}|${SOURCE_REPO_TEMPLATE}] to update array"
+        # We found the repo, need to make note of it
+        Debug "Found repo match:[${SOURCE_REPO}]"
+        REPO_EXISTS=1
+      fi
+    
+      # Check if the repo names match and if the key titles match and if the key values match
+      if [ "${SOURCE_REPO}" == "${DESTINATION_REPO}" ] && [ "${SOURCE_KEY_TITLE}" == "${DESTINATION_KEY_TITLE}" ] && [ "${SOURCE_KEY_VALUE}" == "${DESTINATION_KEY_VALUE}" ]; then
+        # We have a match, add the repo name to the update list
+        echo "----------------------------------------------------"
+        echo "We have a match! Key:[${SOURCE_REPO_STRING}][${SOURCE_KEY_TITLE}] exists at:[${DESTINATION_REPO_STRING}][${DESTINATION_KEY_TITLE}]"
+        Debug "FOund the key on the new repo"
+        KEY_EXISTS=1
       fi
     done
-  done
 
-  # Debug info
-  Debug "---- DEBUG ----"
-  Debug "UPDATE_REPO_ARRAY:"
-  for LINE in  "${UPDATE_REPO_ARRAY[@]}"; do
-    Debug "${LINE}"
+    # check if we have a match in the source repos
+    if [ "${REPO_EXISTS}" -eq 1 ] && [ "${KEY_EXISTS}" -eq 0 ]; then
+      # We did not find the repo, add it to the update list
+      echo "----------------------------------------------------"
+      echo "We found matching repo:[${SOURCE_REPO_STRING}] but did not find matching key:[${SOURCE_KEY_TITLE}] at:[${DESTINATION_REPO_STRING}]"
+      # We need to delete the orginal key from the source repo
+      Debug "Deleting key from source repo"
+      DeleteKeyFromRepo "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}"
+      # We need to add the key to the destination repo
+      Debug "Adding key to destination repo"
+      AddKeyToRepo "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_VALUE}"
+    fi
   done
+}
+################################################################################
+#### Function DeleteKeyFromRepo ################################################
+DeleteKeyFromRepo() {
+  # Pull in input vars
+  ORG_NAME="${1}"
+  REPO_NAME="${2}"
+  KEY_TITLE="${3}"
+  KEY_ID="${4}"
+
+  echo "----------------------------------------------------"
+  echo "Deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+  # Need to call the API to delete the github deploy key
+  # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
+  DELETE_CMD=$(curl --fail -s -X DELETE \
+    -H "Accept: application/vnd.github.v3+json" \ 
+    -H "Authorization: token <TOKEN>" \
+    "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys/${KEY_ID}" 2>&1)
+
+  # Check for errors
+  ERROR_CODE=$?
+
+  if [ "${ERROR_CODE}" -ne 0 ]; then
+    echo "----------------------------------------------------"
+    echo "Error deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+    echo "Error Code:[${ERROR_CODE}]"
+    echo "Error Message:[${DELETE_CMD}]"
+    exit 1
+  else
+    echo "----------------------------------------------------"
+    echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+  fi
+}
+################################################################################
+#### Function AddKeyToRepo #####################################################
+AddKeyToRepo() {
+  # Pull in vars
+  ORG_NAME="${1}"
+  REPO_NAME="${2}"
+  KEY_TITLE="${3}"
+  KEY_VALUE="${4}"
+
+  echo "----------------------------------------------------"
+  echo "Adding key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
+  # Need to call the API to add the github deploy key
+  # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
+  ADD_CMD=$(curl --fail -s -X POST \
+    -H "Accept: application/vnd.github.v3+json" \ 
+    -H "Authorization: token <TOKEN>" \
+    -H "Content-Type: application/json" \
+    -d "{\"title\":\"${KEY_TITLE}\",\"key\":\"${KEY_VALUE}\"}" \
+    "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys" 2>&1)
+  
+  # Check for errors
+  ERROR_CODE=$?
+
+  if [ "${ERROR_CODE}" -ne 0 ]; then
+    echo "----------------------------------------------------"
+    echo "Error adding key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
+    echo "Error Code:[${ERROR_CODE}]"
+    echo "Error Message:[${ADD_CMD}]"
+    exit 1
+  else
+    echo "----------------------------------------------------"
+    echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
+  fi
 }
 ################################################################################
 ############################## MAIN ############################################
@@ -430,10 +688,11 @@ else
   # Get the list of all repos in the orgs #
   #########################################
   GetAllSourceRepos
+  GetAllDestinationRepos
   ###############################################################
   # Loop through the repos and generate list of repos to update #
   ###############################################################
-  #GenerateUpdateList
+  GenerateUpdateList
   # Loop through the list of repos and update the visibility
   # for OBJECT in "${UPDATE_REPO_ARRAY[@]}"; do
   #   # Get the vars from the string
