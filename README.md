@@ -1,11 +1,12 @@
 # gh-migrate-deploy-keys
 
-This script is used by the `gh` command-line to help sync/migrate **GitHub Deploy Keys** of repositories from one Organization to another. This is usually needed when you migrate repositories from an original Organization into a new Organization. If no input file is provided, it will find all **GitHub Deploy Keys** of all repositories found in the *source* Organization  and migrate them to the *destination* Organization.
+This script is used by the `gh` command-line to help sync/migrate **GitHub Deploy Keys** of repositories from one Organization to another. This is usually needed when you migrate repositories from an original Organization into a new Organization.
+If no input file is provided, it will find all **GitHub Deploy Keys** of all repositories found in the *source* Organization  and migrate them to the *destination* Organization.
 
 If an input file is provided, it will only update the **GitHub Deploy Keys** of all repositories in the input file.
 
 **Note:** You can **NOT** have a non unique **GitHub Deploy Key** in **GitHub**.
-In order for this tool to work, it will need to copy the `public_key` and `title` of the **GitHub Deploy Key** to the **GitHub** repository. It will the **Delete** the **GitHub Deploy Key** from the **GitHub** repository. It will then **Create** a new **GitHub Deploy Key** with the same `title` and `public_key` in the source **GitHub** repository. 
+In order for this tool to work, it will need to copy the `public_key` and `title` of the **GitHub Deploy Key** to the **GitHub** repository. It will the **Delete** the **GitHub Deploy Key** from the **GitHub** repository. It will then **Create** a new **GitHub Deploy Key** with the same `title` and `public_key` in the source **GitHub** repository.
 
 ## PREREQS
 
