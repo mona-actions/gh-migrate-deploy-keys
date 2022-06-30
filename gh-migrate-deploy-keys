@@ -128,6 +128,8 @@ LOG_FILE="${LOG_DIR}/gh-migrate-deploy-keys-${EPOCH_TIME}.log" # Set to default 
 SOURCE_REPO_ARRAY=()      # Array of source repo names
 DESTINATION_REPO_ARRAY=() # Array of destination repo names
 UPDATE_ARRAY=()           # Array of repos to update
+KEYS_CREATED=0            # Number of keys created
+KEYS_DELETED=0            # Number of keys deleted
 
 ################################################################################
 ############################ FUNCTIONS #########################################
@@ -150,6 +152,22 @@ Debug() {
   fi
 }
 ################################################################################
+#### Function ValidateJQ #######################################################
+ValidateJQ() {
+  # Need to validate the machine has jq installed as we use it to do the parsing
+  # of all the json returns from GitHub
+
+  if ! jq --version &>/dev/null
+  then
+    echo "Failed to find jq in the path!"
+    echo "If this is a Mac, run command: brew install jq"
+    echo "If this is Debian, run command: sudo apt install jq"
+    echo "If this is Centos, run command: yum install jq"
+    echo "Once installed, please run this script again."
+    exit 1
+  fi
+}
+################################################################################
 #### Function Header ###########################################################
 Header() {
   echo ""
@@ -159,10 +177,12 @@ Header() {
   echo "######################################################"
   echo "######################################################"
   echo ""
-  echo "NOTE: This script is used by the gh command line to help migrate GitHub Deploy Keys"
+  echo "NOTE:"
+  echo "This script is used by the gh command line to help migrate GitHub Deploy Keys"
   echo "In order to do this, it will need to remove the deploy key from the"
   echo "source organization repository and add it to the destination organization repository."
   echo "There is some level of risk associated with this script, so please use it with caution."
+  echo ""
   echo "Logs will be written to:[${LOG_FILE}]"
   echo ""
 
@@ -181,30 +201,14 @@ Header() {
 ################################################################################
 #### Function Footer ###########################################################
 Footer() {
-  #######################################
-  # Basic footer information and totals #
-  #######################################
+  # Basic footer information and totals
   echo ""
   echo "######################################################"
   echo "The script has completed"
   echo "######################################################"
+  echo "Total Deploy Keys Created:[${KEYS_CREATED}]"
+  echo "Total Deploy Keys Deleted:[${KEYS_DELETED}]"
   echo ""
-}
-################################################################################
-#### Function ValidateJQ #######################################################
-ValidateJQ() {
-  # Need to validate the machine has jq installed as we use it to do the parsing
-  # of all the json returns from GitHub
-
-  if ! jq --version &>/dev/null
-  then
-    echo "Failed to find jq in the path!"
-    echo "If this is a Mac, run command: brew install jq"
-    echo "If this is Debian, run command: sudo apt install jq"
-    echo "If this is Centos, run command: yum install jq"
-    echo "Once installed, please run this script again."
-    exit 1
-  fi
 }
 ################################################################################
 #### Function GetAllSourceRepos ################################################
@@ -232,14 +236,10 @@ GetAllSourceRepos() {
     -H 'Content-Type: application/json' \
     -d "{\"query\":\"query {organization(login: ${SOURCE_ORG_NAME_STRING}) {repositories(first: ${REPO_PAGE_SIZE}, after: ${SOURCE_END_CURSOR_STRING}) {nodes {nameWithOwner deployKeys(first: 100, after: null) {totalCount nodes {id title key readOnly}}} totalCount pageInfo {hasNextPage endCursor}}}}\"}" 2>&1)
 
-  #######################
-  # Load the error code #
-  #######################
+  # Load the error code
   ERROR_CODE=$?
 
-  ##########################
-  # Check the shell return #
-  ##########################
+  # Check the shell return
   if [ $ERROR_CODE -ne 0 ]; then
     echo "ERROR! Failed to gather data from GitHub!"
     exit 1
@@ -254,14 +254,10 @@ GetAllSourceRepos() {
   Debug "NEXT_PAGE:[${NEXT_PAGE}]"
   Debug "SOURCE_END_CURSOR:[${SOURCE_END_CURSOR}]"
 
-  #############################################
-  # Parse all the repo data out of data block #
-  #############################################
+  # Parse all the repo data out of data block
   ParseSourceRepoData "$DATA_BLOCK"
 
-  ########################################
-  # See if we need to loop for more data #
-  ########################################
+  # See if we need to loop for more data
   if [ "$NEXT_PAGE" == "false" ]; then
     # We have all the data, we can move on
     echo "Gathered all data from source GitHub Organization"
@@ -269,9 +265,7 @@ GetAllSourceRepos() {
   elif [ "$NEXT_PAGE" == "true" ]; then
     # We need to loop through GitHub to get all repos
     echo "More pages of repos... Looping through data with new cursor:[$SOURCE_END_CURSOR]"
-    ######################################
-    # Call GetData again with new cursor #
-    ######################################
+    # Call GetData again with new cursor
     GetAllSourceRepos
   else
     # Failing to get this value means we didnt get a good response back from GitHub
@@ -329,7 +323,12 @@ ParseSourceRepoData() {
         ORG_REPO=$(echo "${ORG_REPO_NAME}" | tr '[:upper:]' '[:lower:]')
         # Create string of all values to add to array
         KEY_STRING="${ORG_REPO}|${KEY_ID}|${KEY_TITLE}|${KEY_VALUE}|${KEY_READ_ONLY}"
-        echo "Adding key:[${KEY_STRING}] to source array"
+        echo "Adding key:"
+        echo " - ORG/REPO:[${ORG_REPO}]"
+        echo " - KEY_ID:[${KEY_ID}]"
+        echo " - KEY_TITLE:[${KEY_TITLE}]"
+        echo " - KEY_VALUE:[${KEY_VALUE}]"
+        echo " - KEY_READ_ONLY:[${KEY_READ_ONLY}]"
         # Add the key to the source repo array
         SOURCE_REPO_ARRAY+=("${KEY_STRING}")
       done
@@ -362,14 +361,10 @@ GetAllDestinationRepos() {
     -H 'Content-Type: application/json' \
     -d "{\"query\":\"query {organization(login: ${DESTINATION_ORG_NAME_STRING}) {repositories(first: ${REPO_PAGE_SIZE}, after: ${DESTINATION_END_CURSOR_STRING}) {nodes {nameWithOwner deployKeys(first: 100, after: null) {totalCount nodes {id title key readOnly}}} totalCount pageInfo {hasNextPage endCursor}}}}\"}" 2>&1)
 
-  #######################
-  # Load the error code #
-  #######################
+  # Load the error code
   ERROR_CODE=$?
 
-  ##########################
-  # Check the shell return #
-  ##########################
+  # Check the shell return
   if [ $ERROR_CODE -ne 0 ]; then
     echo "ERROR! Failed to gather data from GitHub!"
     exit 1
@@ -384,14 +379,10 @@ GetAllDestinationRepos() {
   Debug "NEXT_PAGE:[${NEXT_PAGE}]"
   Debug "DESTINATION_END_CURSOR:[${DESTINATION_END_CURSOR}]"
 
-  #############################################
-  # Parse all the repo data out of data block #
-  #############################################
+  # Parse all the repo data out of data block
   ParseDestinationRepoData "$DATA_BLOCK"
 
-  ########################################
-  # See if we need to loop for more data #
-  ########################################
+  # See if we need to loop for more data
   if [ "$NEXT_PAGE" == "false" ]; then
     # We have all the data, we can move on
     echo "Gathered all data from destination GitHub Organization"
@@ -399,9 +390,7 @@ GetAllDestinationRepos() {
   elif [ "$NEXT_PAGE" == "true" ]; then
     # We need to loop through GitHub to get all repos
     echo "More pages of repos... Looping through data with new cursor:[${DESTINATION_END_CURSOR}]"
-    ######################################
-    # Call GetData again with new cursor #
-    ######################################
+    # Call GetData again with new cursor
     GetAllDestinationRepos
   else
     # Failing to get this value means we didnt get a good response back from GitHub
@@ -501,6 +490,10 @@ ValidateArgs() {
       exit 1
     fi
   fi
+
+  # Validation successful, move on
+  echo "Validation of input successful"
+  echo "----------------------------------------------------"
 }
 ################################################################################
 #### Function GenerateUpdateList ###############################################
@@ -526,6 +519,7 @@ GenerateUpdateList() {
     SOURCE_KEY_ID=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f2)
     SOURCE_KEY_TITLE=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f3)
     SOURCE_KEY_VALUE=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f4)
+    SOURCE_KEY_READ_ONLY=$(echo "${SOURCE_OBJECT}" | cut -d'|' -f5)
     # Debug Info
     Debug "SOURCE_OBJECT:[${SOURCE_OBJECT}]"
     Debug "SOURCE_REPO_STRING:[${SOURCE_REPO_STRING}]"
@@ -534,6 +528,7 @@ GenerateUpdateList() {
     Debug "SOURCE_KEY_ID:[${SOURCE_KEY_ID}]"
     Debug "SOURCE_KEY_TITLE:[${SOURCE_KEY_TITLE}]"
     Debug "SOURCE_KEY_VALUE:[${SOURCE_KEY_VALUE}]"
+    Debug "SOURCE_KEY_READ_ONLY:[${SOURCE_KEY_READ_ONLY}]"
 
     # Loop through the destination repos and see if we have a match in the source repos
     for DESTINATION_OBJECT in "${DESTINATION_REPO_ARRAY[@]}"; do
@@ -544,6 +539,7 @@ GenerateUpdateList() {
       DESTINATION_KEY_ID=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f2)
       DESTINATION_KEY_TITLE=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f3)
       DESTINATION_KEY_VALUE=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f4)
+      DESTINATION_KEY_READ_ONLY=$(echo "${DESTINATION_OBJECT}" | cut -d'|' -f5)
       # Debug Info
       Debug "DESTINATION_OBJECT:[${DESTINATION_OBJECT}]"
       Debug "DESTINATION_REPO_STRING:[${DESTINATION_REPO_STRING}]"
@@ -552,6 +548,7 @@ GenerateUpdateList() {
       Debug "DESTINATION_KEY_ID:[${DESTINATION_KEY_ID}]"
       Debug "DESTINATION_KEY_TITLE:[${DESTINATION_KEY_TITLE}]"
       Debug "DESTINATION_KEY_VALUE:[${DESTINATION_KEY_VALUE}]"
+      Debug "DESTINATION_KEY_READ_ONLY:[${DESTINATION_KEY_READ_ONLY}]"
 
       if [ "${SOURCE_REPO}" == "${DESTINATION_REPO}" ]; then
         # We found the repo, need to make note of it
@@ -561,25 +558,25 @@ GenerateUpdateList() {
     
       # Check if the repo names match and if the key titles match and if the key values match
       if [ "${SOURCE_REPO}" == "${DESTINATION_REPO}" ] && [ "${SOURCE_KEY_TITLE}" == "${DESTINATION_KEY_TITLE}" ] && [ "${SOURCE_KEY_VALUE}" == "${DESTINATION_KEY_VALUE}" ]; then
-        # We have a match, add the repo name to the update list
+        # We have a match,no need to the update list
         echo "----------------------------------------------------"
         echo "We have a match! Key:[${SOURCE_REPO_STRING}][${SOURCE_KEY_TITLE}] exists at:[${DESTINATION_REPO_STRING}][${DESTINATION_KEY_TITLE}]"
-        Debug "FOund the key on the new repo"
+        Debug "Found the key on the new repo, no need to update"
         KEY_EXISTS=1
       fi
-    done
 
-    # check if we have a match in the source repos
-    if [ "${REPO_EXISTS}" -eq 1 ] && [ "${KEY_EXISTS}" -eq 0 ]; then
-      # We did not find the repo, add it to the update list
-      echo "----------------------------------------------------"
-      echo "We found matching repo:[${SOURCE_REPO_STRING}] but did not find matching key:[${SOURCE_KEY_TITLE}] at:[${DESTINATION_REPO_STRING}]"
-      echo "Adding to update list"
-      # Create string for UPDATE_ARRAY
-      UPDATE_REPO_STRING="${SOURCE_ORG}/${SOURCE_REPO}|${SOURCE_KEY_TITLE}|${SOURCE_KEY_ID}|${DESTINATION_ORG}/${DESTINATION_REPO}|${DESTINATION_KEY_VALUE}"
-      # Add to the update array
-      UPDATE_ARRAY+=("${UPDATE_REPO_STRING}")
-    fi
+      # check if we have a match in the source repos
+      if [ "${REPO_EXISTS}" -eq 1 ] && [ "${KEY_EXISTS}" -eq 0 ] && [ "${SOURCE_REPO}" == "${DESTINATION_REPO}" ]; then
+        # We did not find the repo, add it to the update list
+        echo "----------------------------------------------------"
+        echo "We found matching repo:[${SOURCE_REPO_STRING}] but did not find matching key:[${SOURCE_KEY_TITLE}] at:[${DESTINATION_REPO_STRING}]"
+        echo "Adding to update list"
+        # Create string for UPDATE_ARRAY
+        UPDATE_REPO_STRING="${SOURCE_ORG}/${SOURCE_REPO}|${SOURCE_KEY_TITLE}|${SOURCE_KEY_ID}|${DESTINATION_ORG}/${DESTINATION_REPO}|${SOURCE_KEY_VALUE}|${SOURCE_KEY_READ_ONLY}"
+        # Add to the update array
+        UPDATE_ARRAY+=("${UPDATE_REPO_STRING}")
+      fi
+    done
   done
 }
 ################################################################################
@@ -596,10 +593,8 @@ DeleteKeyFromRepo() {
   echo "Deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
 
   # Write the information to the log file
-  ls -la
-  pwd
   echo "----------------------------------------------------" >> "${LOG_FILE}"
-  echo "Deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}] with title:[${KEY_TITLE}]" >> "${LOG_FILE}"
+  echo "Deleting key:[${KEY_TITLE}] from repo:[${ORG_NAME}/${REPO_NAME}] with title:[${KEY_TITLE}]" >> "${LOG_FILE}"
   echo "KEY_ID:[${KEY_ID}]" >> "${LOG_FILE}"
   echo "KEY_VALUE:[${KEY_VALUE}]" >> "${LOG_FILE}"
 
@@ -681,14 +676,18 @@ AddKeyToRepo() {
   REPO_NAME="${2}"
   KEY_TITLE="${3}"
   KEY_VALUE="${4}"
+  KEY_READ_ONLY="${5}"
 
   echo "----------------------------------------------------"
-  echo "Adding key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
+  echo "Adding key:[${KEY_TITLE}] to repo:[${ORG_NAME}/${REPO_NAME}]"
+  echo "KEY_VALUE:[${KEY_VALUE}]"
+  echo "KEY_READ_ONLY:[${KEY_READ_ONLY}]"
 
   # Write the information to the log file
   echo "----------------------------------------------------" >> "${LOG_FILE}"
   echo "Creating key:[${KEY_TITLE}] from repo:[${REPO_NAME}] with title:[${KEY_TITLE}]" >> "${LOG_FILE}"
   echo "KEY_VALUE:[${KEY_VALUE}]" >> "${LOG_FILE}"
+  echo "KEY_READ_ONLY:[${KEY_READ_ONLY}]" >> "${LOG_FILE}"
 
   # Need to call the API to add the github deploy key
   # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
@@ -696,7 +695,7 @@ AddKeyToRepo() {
     -H "Accept: application/vnd.github.v3+json" \
     -H "Authorization: token ${DESTINATION_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "{\"title\":\"${KEY_TITLE}\",\"key\":\"${KEY_VALUE}\"}" \
+    -d "{\"title\":\"${KEY_TITLE}\",\"key\":\"${KEY_VALUE}\",\"read_only\": ${KEY_READ_ONLY}}" \
     "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys" 2>&1)
   
   # Check for errors
@@ -777,8 +776,14 @@ if [[ -n "${INPUT_FILE_NAME}" ]]; then
     # Split the line into the org and repo name #
     #############################################
     ORG_REPO_NAME=$(echo "${LINE}" | tr '[:upper:]' '[:lower:]')
-    ORG_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'|' -f1)
-    REPO_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'|' -f2)
+    ORG_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'/' -f1)
+    REPO_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'/' -f2)
+    READ_ONLY=$(echo "${LINE}" | cut -d',' -f2)
+
+    # If READ_ONLY is not set, set it to true
+    if [[ -z "${READ_ONLY}" ]]; then
+      READ_ONLY=true
+    fi
 
     # Debug info
     Debug "ORG_REPO_NAME:[${ORG_REPO_NAME}]"
@@ -814,15 +819,13 @@ if [[ -n "${INPUT_FILE_NAME}" ]]; then
     fi
   done < "${INPUT_FILE_NAME}"
 else
-  #########################################
-  # Get the list of all repos in the orgs #
-  #########################################
+  # Get the list of all repos in the source org
   GetAllSourceRepos
+  # Get the list of all repos in the destination org
   GetAllDestinationRepos
-  ###############################################################
-  # Loop through the repos and generate list of repos to update #
-  ###############################################################
+  # Loop through the repos and generate list of repos to update
   GenerateUpdateList
+
   # Loop through the list of repos and update the visibility
   for OBJECT in "${UPDATE_ARRAY[@]}"; do
    # Create string for UPDATE_ARRAY
@@ -835,6 +838,7 @@ else
     DESTINATION_ORG=$(echo "${OBJECT}" | cut -d'|' -f4 | cut -d'/' -f1)
     DESTINATION_REPO=$(echo "${OBJECT}" | cut -d'|' -f4 | cut -d'/' -f2)
     DESTINATION_KEY_VALUE=$(echo "${OBJECT}" | cut -d'|' -f5)
+    SOURCE_KEY_READ_ONLY=$(echo "${OBJECT}" | cut -d'|' -f6)
 
     # The SOURCE_KEY_ID is the node ID and not the actual ID... 
     # This cannot be pulled from graphql and needs to be pulled from the API
@@ -849,13 +853,13 @@ else
       echo "----------------------------------------------------" >> "${LOG_FILE}"
       exit 2
     fi
-    
+
     Debug "Deleting key from source repo"
     DeleteKeyFromRepo "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}" "${DESTINATION_KEY_VALUE}"
 
     # We need to add the key to the destination repo
     Debug "Adding key to destination repo"
-    AddKeyToRepo "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${SOURCE_KEY_TITLE}" "${DESTINATION_KEY_VALUE}"
+    AddKeyToRepo "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${SOURCE_KEY_TITLE}" "${DESTINATION_KEY_VALUE}" "${SOURCE_KEY_READ_ONLY}"
   done
 fi
 
