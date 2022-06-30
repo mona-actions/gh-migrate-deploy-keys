@@ -623,6 +623,8 @@ DeleteKeyFromRepo() {
     echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
     echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]" >> "${LOG_FILE}"
     echo "----------------------------------------------------" >> "${LOG_FILE}"
+    # Increment the counter
+    DELETE_COUNT=$((DELETE_COUNT+1))
   fi
 }
 #################################################################################
@@ -716,6 +718,8 @@ AddKeyToRepo() {
     echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
     echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]" >> "${LOG_FILE}"
     echo "----------------------------------------------------" >> "${LOG_FILE}"
+    # Increment the counter
+    ADD_COUNT=$((ADD_COUNT+1))
   fi
 }
 ################################################################################
