@@ -630,7 +630,7 @@ DeleteKeyFromRepo() {
       echo "----------------------------------------------------"
     } >> "${LOG_FILE}"
     # Increment the counter
-    DELETE_COUNT=$((DELETE_COUNT+1))
+    KEYS_DELETED=$((KEYS_DELETED+1))
   fi
 }
 #################################################################################
@@ -739,7 +739,7 @@ AddKeyToRepo() {
       echo "----------------------------------------------------"
     } >> "${LOG_FILE}"
     # Increment the counter
-    ADD_COUNT=$((ADD_COUNT+1))
+    KEYS_CREATED=$((KEYS_CREATED+1))
   fi
 }
 ################################################################################
