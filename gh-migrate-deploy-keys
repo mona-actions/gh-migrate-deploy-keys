@@ -119,11 +119,15 @@ REPO_PAGE_SIZE="${REPO_PAGE_SIZE:-100}" # Default to 100 if not passed
 SOURCE_END_CURSOR='null'                # Set to null, will be updated after call
 DESTINATION_END_CURSOR='null'           # Set to null, will be updated after call
 GITHUB_API_URL='https://api.github.com' # Set to default GitHub API URL
+LOG_DIR="$(pwd)"   # Set to default log directory
+EPOCH_TIME=$(date +%s)                  # Set to current epoch time
+LOG_FILE="${LOG_DIR}/gh-migrate-deploy-keys-${EPOCH_TIME}.log" # Set to default log file name
 ###########
 # GLOBALS #
 ###########
 SOURCE_REPO_ARRAY=()      # Array of source repo names
 DESTINATION_REPO_ARRAY=() # Array of destination repo names
+UPDATE_ARRAY=()           # Array of repos to update
 
 ################################################################################
 ############################ FUNCTIONS #########################################
@@ -159,6 +163,7 @@ Header() {
   echo "In order to do this, it will need to remove the deploy key from the"
   echo "source organization repository and add it to the destination organization repository."
   echo "There is some level of risk associated with this script, so please use it with caution."
+  echo "Logs will be written to:[${LOG_FILE}]"
   echo ""
 
   # Debug info
@@ -169,6 +174,8 @@ Header() {
   Debug "Destination Organization:[${DESTINATION_ORG_NAME}]"
   Debug "Repo Page Size:[${REPO_PAGE_SIZE}]"
   Debug "Input File:[${INPUT_FILE_NAME}]"
+  Debug "LOG_DIR:[${LOG_DIR}]"
+  Debug "Log File:[${LOG_FILE}]"
   Debug "---- DEBUG ----"
 }
 ################################################################################
@@ -567,12 +574,11 @@ GenerateUpdateList() {
       # We did not find the repo, add it to the update list
       echo "----------------------------------------------------"
       echo "We found matching repo:[${SOURCE_REPO_STRING}] but did not find matching key:[${SOURCE_KEY_TITLE}] at:[${DESTINATION_REPO_STRING}]"
-      # We need to delete the orginal key from the source repo
-      Debug "Deleting key from source repo"
-      DeleteKeyFromRepo "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}"
-      # We need to add the key to the destination repo
-      Debug "Adding key to destination repo"
-      AddKeyToRepo "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_VALUE}"
+      echo "Adding to update list"
+      # Create string for UPDATE_ARRAY
+      UPDATE_REPO_STRING="${SOURCE_ORG}/${SOURCE_REPO}|${SOURCE_KEY_TITLE}|${SOURCE_KEY_ID}|${DESTINATION_ORG}/${DESTINATION_REPO}|${DESTINATION_KEY_VALUE}"
+      # Add to the update array
+      UPDATE_ARRAY+=("${UPDATE_REPO_STRING}")
     fi
   done
 }
@@ -584,9 +590,19 @@ DeleteKeyFromRepo() {
   REPO_NAME="${2}"
   KEY_TITLE="${3}"
   KEY_ID="${4}"
+  KEY_VALUE="${5}"
 
   echo "----------------------------------------------------"
   echo "Deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+
+  # Write the information to the log file
+  ls -la
+  pwd
+  echo "----------------------------------------------------" >> "${LOG_FILE}"
+  echo "Deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}] with title:[${KEY_TITLE}]" >> "${LOG_FILE}"
+  echo "KEY_ID:[${KEY_ID}]" >> "${LOG_FILE}"
+  echo "KEY_VALUE:[${KEY_VALUE}]" >> "${LOG_FILE}"
+
   # Need to call the API to delete the github deploy key
   # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
   DELETE_CMD=$(curl --fail -s -X DELETE \
@@ -602,11 +618,60 @@ DeleteKeyFromRepo() {
     echo "Error deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
     echo "Error Code:[${ERROR_CODE}]"
     echo "Error Message:[${DELETE_CMD}]"
+    echo "Failed to delete key" >> "${LOG_FILE}"
+    echo "Error Code:[${ERROR_CODE}]" >> "${LOG_FILE}"
+    echo "Error Message:[${DELETE_CMD}]" >> "${LOG_FILE}"
+    echo "----------------------------------------------------" >> "${LOG_FILE}"
     exit 1
   else
     echo "----------------------------------------------------"
     echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+    echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]" >> "${LOG_FILE}"
+    echo "----------------------------------------------------" >> "${LOG_FILE}"
   fi
+}
+#################################################################################
+#### Function GetDeployKeysFromRepo #############################################
+GetDeployKeysFromRepo() {
+  # Pull in input vars
+  ORG_NAME="${1}"
+  REPO_NAME="${2}"
+
+  # Get the deploy keys for the repo
+  # https://developer.github.com/v3/repos/keys/#list-deploy-keys
+  DEPLOY_KEYS=$(curl --fail -s -X GET \
+    -H "Accept: application/vnd.github.v3+json" \
+    -H "Authorization: token ${SOURCE_TOKEN}" \
+    "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys" 2>&1)
+  
+  # Check for errors
+  ERROR_CODE=$?
+
+  if [ "${ERROR_CODE}" -ne 0 ]; then
+    echo "Failed to get deploy keys" >> "${LOG_FILE}"
+    echo "Error Code:[${ERROR_CODE}]" >> "${LOG_FILE}"
+    echo "Error Message:[${DEPLOY_KEYS}]" >> "${LOG_FILE}"
+    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    exit 1
+  else
+    echo "Successfully got deploy keys for repo:[${REPO_NAME}]" >> "${LOG_FILE}"
+    echo "----------------------------------------------------" >> "${LOG_FILE}"
+  fi
+
+  # Parse the deploy keys
+  KEYS=($(echo "${DEPLOY_KEYS}" | jq -r '.[] | .title + "|" + (.id|tostring) + "|" + .key'))
+
+  # Check if the array is empty
+  if [ "${#KEYS[@]}" -eq 0 ]; then
+    echo "No deploy keys found for repo:[${REPO_NAME}]" >> "${LOG_FILE}"
+    echo "----------------------------------------------------" >> "${LOG_FILE}"
+  else
+    echo "Found ${#KEYS[*]} deploy keys for repo:[${REPO_NAME}]" >> "${LOG_FILE}"
+    echo "----------------------------------------------------" >> "${LOG_FILE}"
+  fi
+
+  # return the array
+  echo "${KEYS[@]}"
 }
 ################################################################################
 #### Function AddKeyToRepo #####################################################
@@ -619,6 +684,12 @@ AddKeyToRepo() {
 
   echo "----------------------------------------------------"
   echo "Adding key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
+
+  # Write the information to the log file
+  echo "----------------------------------------------------" >> "${LOG_FILE}"
+  echo "Creating key:[${KEY_TITLE}] from repo:[${REPO_NAME}] with title:[${KEY_TITLE}]" >> "${LOG_FILE}"
+  echo "KEY_VALUE:[${KEY_VALUE}]" >> "${LOG_FILE}"
+
   # Need to call the API to add the github deploy key
   # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
   ADD_CMD=$(curl --fail -s -X POST \
@@ -636,11 +707,46 @@ AddKeyToRepo() {
     echo "Error adding key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
     echo "Error Code:[${ERROR_CODE}]"
     echo "Error Message:[${ADD_CMD}]"
+    echo "Failed to add key" >> "${LOG_FILE}"
+    echo "Error Code:[${ERROR_CODE}]" >> "${LOG_FILE}"
+    echo "Error Message:[${ADD_CMD}]" >> "${LOG_FILE}"
+    echo "----------------------------------------------------" >> "${LOG_FILE}"
     exit 1
   else
     echo "----------------------------------------------------"
     echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
+    echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]" >> "${LOG_FILE}"
+    echo "----------------------------------------------------" >> "${LOG_FILE}"
   fi
+}
+################################################################################
+#### Function GetKeyID #########################################################
+GetKeyID() {
+  # Pull in vars
+  ORG_NAME="${1}"
+  REPO_NAME="${2}"
+  KEY_TITLE="${3}"
+  KEY_ID=""
+
+  # Get the key ID
+  # https://developer.github.com/v3/repos/keys/#get-a-specific-key
+  GET_KEYS_CMD=$(curl --fail -s -X GET \
+    -H "Accept: application/vnd.github.v3+json" \
+    -H "Authorization: token ${SOURCE_TOKEN}" \
+    "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys" 2>&1)
+  
+  # Check for errors
+  ERROR_CODE=$?
+
+  if [ "${ERROR_CODE}" -ne 0 ]; then
+    KEY_ID="FAILED"
+  fi
+
+  # Parse the key ID
+  KEY_ID=$(echo "${GET_KEYS_CMD}" | jq -r '.[] | select(.title == "'"${KEY_TITLE}"'") | .id')
+
+  # Return the key ID
+  echo "${KEY_ID}"
 }
 ################################################################################
 ############################## MAIN ############################################
@@ -666,21 +772,46 @@ ValidateJQ
 #####################################
 if [[ -n "${INPUT_FILE_NAME}" ]]; then
   # Read in the input file and parse the lines
-  while read -r line; do
+  while read -r LINE; do
     #############################################
     # Split the line into the org and repo name #
     #############################################
-    REPO_NAME=$(echo "${line}" | tr '[:upper:]' '[:lower:]')
+    ORG_REPO_NAME=$(echo "${LINE}" | tr '[:upper:]' '[:lower:]')
+    ORG_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'|' -f1)
+    REPO_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'|' -f2)
 
     # Debug info
-    Debug "REPO_NAME:[${REPO_NAME}]"
+    Debug "ORG_REPO_NAME:[${ORG_REPO_NAME}]"
 
-    #####################################
-    # Update the visibility of the repo #
-    #####################################
-    GetDeployKeys "${SOURCE_ORG_NAME}" "${REPO_NAME}"
-    DeleteDeployKeys "${SOURCE_ORG_NAME}" "${REPO_NAME}"
-    CreateDeployKeys "${DESTINATION_ORG_NAME}" "${REPO_NAME}"
+    # Get the deploy keys with this repo
+    Debug "Getting deploy keys for repo:[${ORG_NAME}/${REPO_NAME}]"
+
+    # Create array of deploy keys returned from GetDeployKeysFromRepo
+    KEYS_ARRAY=($(GetDeployKeysFromRepo "${ORG_NAME}" "${REPO_NAME}"))
+
+    # Check if the array is empty
+    if [ "${#KEYS_ARRAY[@]}" -eq 0 ]; then
+      echo "----------------------------------------------------"
+      echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]"
+      echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]" >> "${LOG_FILE}"
+      echo "----------------------------------------------------" >> "${LOG_FILE}"
+      exit 2
+    else
+      # Loop through the array and add the keys
+      for KEY in "${KEYS_ARRAY[@]}"; do
+        # Split the key into the title and value
+        KEY_TITLE=$(echo "${KEY}" | cut -d'|' -f1)
+        KEY_ID=$(echo "${KEY}" | cut -d'|' -f2)
+        KEY_VALUE=$(echo "${KEY}" | cut -d'|' -f3)
+       
+        Debug "Deleting key from source repo"
+        DeleteKeyFromRepo "${ORG_NAME}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}"
+
+        # Add the key to the repo
+        Debug "Adding key:[${KEY_TITLE}] to repo:[${ORG_NAME}/${REPO_NAME}]"
+        AddKeyToRepo "${DESTINATION_ORG}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_VALUE}"
+      done
+    fi
   done < "${INPUT_FILE_NAME}"
 else
   #########################################
@@ -693,23 +824,39 @@ else
   ###############################################################
   GenerateUpdateList
   # Loop through the list of repos and update the visibility
-  # for OBJECT in "${UPDATE_REPO_ARRAY[@]}"; do
-  #   # Get the vars from the string
-  #   ORG_REPO=$(echo "${OBJECT}" | cut -d'|' -f1)
-  #   ORG=$(echo "${ORG_REPO}" | cut -d'/' -f1)
-  #   REPO=$(echo "${ORG_REPO}" | cut -d'/' -f2)
-  #   VISIBILITY=$(echo "${OBJECT}" | cut -d'|' -f2)
-  #   TEMPLATE=$(echo "${OBJECT}" | cut -d'|' -f3)
-  #   # Debug info
-  #   Debug "---- DEBUG ----"
-  #   Debug "OBJECT:[${OBJECT}]"
-  #   Debug "ORG_REPO:[${ORG_REPO}]"
-  #   Debug "ORG:[${ORG}]"
-  #   Debug "REPO:[${REPO}]"
-  #   Debug "VISIBILITY:[${VISIBILITY}]"
-  #   Debug "TEMPLATE:[${TEMPLATE}]"
-  #   Debug "---- DEBUG ----"
-  # done
+  for OBJECT in "${UPDATE_ARRAY[@]}"; do
+   # Create string for UPDATE_ARRAY
+    # UPDATE_REPO_STRING="${SOURCE_ORG}/${SOURCE_REPO}|${SOURCE_KEY_TITLE}|${SOURCE_KEY_ID}|${DESTINATION_ORG}/${DESTINATION_REPO}|${DESTINATION_KEY_VALUE}"
+    # Split the string into the org and repo name
+    SOURCE_ORG=$(echo "${OBJECT}" | cut -d'|' -f1 | cut -d'/' -f1)
+    SOURCE_REPO=$(echo "${OBJECT}" | cut -d'|' -f1 | cut -d'/' -f2)
+    SOURCE_KEY_TITLE=$(echo "${OBJECT}" | cut -d'|' -f2)
+    SOURCE_KEY_ID=$(echo "${OBJECT}" | cut -d'|' -f3)
+    DESTINATION_ORG=$(echo "${OBJECT}" | cut -d'|' -f4 | cut -d'/' -f1)
+    DESTINATION_REPO=$(echo "${OBJECT}" | cut -d'|' -f4 | cut -d'/' -f2)
+    DESTINATION_KEY_VALUE=$(echo "${OBJECT}" | cut -d'|' -f5)
+
+    # The SOURCE_KEY_ID is the node ID and not the actual ID... 
+    # This cannot be pulled from graphql and needs to be pulled from the API
+    # Get the key ID from the API
+    SOURCE_KEY_ID=$(GetKeyID "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_KEY_TITLE}")
+
+    # Check if the key ID is FAILED
+    if [ "${SOURCE_KEY_ID}" == "FAILED" ]; then
+      echo "----------------------------------------------------"
+      echo "Failed to get key ID for key:[${SOURCE_KEY_TITLE}] from repo:[${SOURCE_ORG}/${SOURCE_REPO}]"
+      echo "Failed to get key ID for key:[${SOURCE_KEY_TITLE}] from repo:[${SOURCE_ORG}/${SOURCE_REPO}]" >> "${LOG_FILE}"
+      echo "----------------------------------------------------" >> "${LOG_FILE}"
+      exit 2
+    fi
+    
+    Debug "Deleting key from source repo"
+    DeleteKeyFromRepo "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}" "${DESTINATION_KEY_VALUE}"
+
+    # We need to add the key to the destination repo
+    Debug "Adding key to destination repo"
+    AddKeyToRepo "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${SOURCE_KEY_TITLE}" "${DESTINATION_KEY_VALUE}"
+  done
 fi
 
 ##########
