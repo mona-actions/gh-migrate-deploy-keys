@@ -30,8 +30,77 @@ Repo_Name3
 ### Output
 
 ```bash
-gh  migrate-deploy-keys -do lukastestorg2 -dt <REDACTED> -so lukastestorg1 -st <REDACTED>
+gh migrate-deploy-keys --destination-organization lukastestorg2 --destination-token <REDACTED> --source-organization lukastestorg1 --source-token <REDACTED>
 
+######################################################
+######################################################
+########### GitHub Migrate Deploy keys ###############
+######################################################
+######################################################
+
+NOTE:
+This script is used by the gh command line to help migrate GitHub Deploy Keys
+In order to do this, it will need to remove the deploy key from the
+source organization repository and add it to the destination organization repository.
+There is some level of risk associated with this script, so please use it with caution.
+
+Logs will be written to:[/Users/admiralawkbar/github/gh-migrate-deploy-keys/gh-migrate-deploy-keys-1656617536.log]
+
+----------------------------------------------------
+Validating user input...
+Validation of input successful
+----------------------------------------------------
+Getting all source repos for:[lukastestorg1]
+Getting deploy keys for repo:[LukasTestOrg1/repo1]
+Adding key:
+ - ORG/REPO:[lukastestorg1/repo1]
+ - KEY_ID:[PK_kwPOHig77M4EDmZS]
+ - KEY_TITLE:[demokey1]
+ - KEY_VALUE:[ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOvNXwEO4VumiiqDtyDUlYTLuIDpcNLDNupVxZqZt6x/]
+ - KEY_READ_ONLY:[false]
+Gathered all data from source GitHub Organization
+----------------------------------------------------
+Getting all destination repos for:[lukastestorg2]
+Gathered all data from destination GitHub Organization
+----------------------------------------------------
+----------------------------------------------------
+Parsing all data and generating migration list...
+----------------------------------------------------
+We found matching repo:[lukastestorg1/repo1] but did not find matching key:[demokey1] at:[lukastestorg2/repo1]
+Adding to update list
+----------------------------------------------------
+Deleting key:[demokey1] from repo:[repo1]
+----------------------------------------------------
+Successfully deleted key:[demokey1] from repo:[repo1]
+----------------------------------------------------
+Adding key:[demokey1] to repo:[lukastestorg2/repo1]
+KEY_VALUE:[ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOvNXwEO4VumiiqDtyDUlYTLuIDpcNLDNupVxZqZt6x/]
+KEY_READ_ONLY:[false]
+----------------------------------------------------
+Successfully added key:[demokey1] to repo:[repo1]
+
+######################################################
+The script has completed
+######################################################
+Total Deploy Keys Created:[1]
+Total Deploy Keys Deleted:[1]
+```
+
+The Output file will have contents like:
+
+```txt
+----------------------------------------------------
+Deleting key:[demokey1] from repo:[lukastestorg1/repo1] with title:[demokey1]
+KEY_ID:[68052562]
+KEY_VALUE:[ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOvNXwEO4VumiiqDtyDUlYTLuIDpcNLDNupVxZqZt6x/]
+Successfully deleted key:[demokey1] from repo:[repo1]
+----------------------------------------------------
+----------------------------------------------------
+Creating key:[demokey1] from repo:[repo1] with title:[demokey1]
+KEY_VALUE:[ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOvNXwEO4VumiiqDtyDUlYTLuIDpcNLDNupVxZqZt6x/]
+KEY_READ_ONLY:[false]
+Successfully added key:[demokey1] to repo:[repo1]
+----------------------------------------------------
 ```
 
 ### Limitations
