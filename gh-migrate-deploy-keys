@@ -651,10 +651,12 @@ GetDeployKeysFromRepo() {
   ERROR_CODE=$?
 
   if [ "${ERROR_CODE}" -ne 0 ]; then
-    echo "Failed to get deploy keys" >> "${LOG_FILE}"
-    echo "Error Code:[${ERROR_CODE}]" >> "${LOG_FILE}"
-    echo "Error Message:[${DEPLOY_KEYS}]" >> "${LOG_FILE}"
-    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    {
+      echo "Failed to get deploy keys"
+      echo "Error Code:[${ERROR_CODE}]"
+      echo "Error Message:[${DEPLOY_KEYS}]"
+      echo "----------------------------------------------------"
+    } >> "${LOG_FILE}"
     exit 1
   else
     {
@@ -664,7 +666,7 @@ GetDeployKeysFromRepo() {
   fi
 
   # Parse the deploy keys
-  KEYS=($(echo "${DEPLOY_KEYS}" | jq -r '.[] | .title + "|" + (.id|tostring) + "|" + .key'))
+  mapfile -t KEYS < <(echo "${DEPLOY_KEYS}" | jq -r '.[] | .title + "|" + (.id|tostring) + "|" + .key')
 
   # Check if the array is empty
   if [ "${#KEYS[@]}" -eq 0 ]; then
@@ -814,7 +816,7 @@ if [[ -n "${INPUT_FILE_NAME}" ]]; then
     Debug "Getting deploy keys for repo:[${ORG_NAME}/${REPO_NAME}]"
 
     # Create array of deploy keys returned from GetDeployKeysFromRepo
-    KEYS_ARRAY=($(GetDeployKeysFromRepo "${ORG_NAME}" "${REPO_NAME}"))
+    mapfile -t KEYS_ARRAY < <(GetDeployKeysFromRepo "${ORG_NAME}" "${REPO_NAME}")
 
     # Check if the array is empty
     if [ "${#KEYS_ARRAY[@]}" -eq 0 ]; then
