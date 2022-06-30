@@ -593,10 +593,12 @@ DeleteKeyFromRepo() {
   echo "Deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
 
   # Write the information to the log file
-  echo "----------------------------------------------------" >> "${LOG_FILE}"
-  echo "Deleting key:[${KEY_TITLE}] from repo:[${ORG_NAME}/${REPO_NAME}] with title:[${KEY_TITLE}]" >> "${LOG_FILE}"
-  echo "KEY_ID:[${KEY_ID}]" >> "${LOG_FILE}"
-  echo "KEY_VALUE:[${KEY_VALUE}]" >> "${LOG_FILE}"
+  {
+    echo "----------------------------------------------------"
+    echo "Deleting key:[${KEY_TITLE}] from repo:[${ORG_NAME}/${REPO_NAME}] with title:[${KEY_TITLE}]"
+    echo "KEY_ID:[${KEY_ID}]"
+    echo "KEY_VALUE:[${KEY_VALUE}]"
+  } >> "${LOG_FILE}"
 
   # Need to call the API to delete the github deploy key
   # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
@@ -613,16 +615,20 @@ DeleteKeyFromRepo() {
     echo "Error deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
     echo "Error Code:[${ERROR_CODE}]"
     echo "Error Message:[${DELETE_CMD}]"
-    echo "Failed to delete key" >> "${LOG_FILE}"
-    echo "Error Code:[${ERROR_CODE}]" >> "${LOG_FILE}"
-    echo "Error Message:[${DELETE_CMD}]" >> "${LOG_FILE}"
-    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    {
+      echo "Failed to delete key"
+      echo "Error Code:[${ERROR_CODE}]"
+      echo "Error Message:[${DELETE_CMD}]"
+      echo "----------------------------------------------------"
+    } >> "${LOG_FILE}"
     exit 1
   else
     echo "----------------------------------------------------"
     echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
-    echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]" >> "${LOG_FILE}"
-    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    {
+      echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+      echo "----------------------------------------------------"
+    } >> "${LOG_FILE}"
     # Increment the counter
     DELETE_COUNT=$((DELETE_COUNT+1))
   fi
@@ -651,8 +657,10 @@ GetDeployKeysFromRepo() {
     echo "----------------------------------------------------" >> "${LOG_FILE}"
     exit 1
   else
-    echo "Successfully got deploy keys for repo:[${REPO_NAME}]" >> "${LOG_FILE}"
-    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    {
+      echo "Successfully got deploy keys for repo:[${REPO_NAME}]"
+      echo "----------------------------------------------------"
+    } >> "${LOG_FILE}"
   fi
 
   # Parse the deploy keys
@@ -660,11 +668,15 @@ GetDeployKeysFromRepo() {
 
   # Check if the array is empty
   if [ "${#KEYS[@]}" -eq 0 ]; then
-    echo "No deploy keys found for repo:[${REPO_NAME}]" >> "${LOG_FILE}"
-    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    {
+      echo "No deploy keys found for repo:[${REPO_NAME}]"
+      echo "----------------------------------------------------"
+    } >> "${LOG_FILE}"
   else
-    echo "Found ${#KEYS[*]} deploy keys for repo:[${REPO_NAME}]" >> "${LOG_FILE}"
-    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    {
+      echo "Found ${#KEYS[*]} deploy keys for repo:[${REPO_NAME}]"
+      echo "----------------------------------------------------"
+    } >> "${LOG_FILE}"
   fi
 
   # return the array
@@ -686,10 +698,12 @@ AddKeyToRepo() {
   echo "KEY_READ_ONLY:[${KEY_READ_ONLY}]"
 
   # Write the information to the log file
-  echo "----------------------------------------------------" >> "${LOG_FILE}"
-  echo "Creating key:[${KEY_TITLE}] from repo:[${REPO_NAME}] with title:[${KEY_TITLE}]" >> "${LOG_FILE}"
-  echo "KEY_VALUE:[${KEY_VALUE}]" >> "${LOG_FILE}"
-  echo "KEY_READ_ONLY:[${KEY_READ_ONLY}]" >> "${LOG_FILE}"
+  {
+    echo "----------------------------------------------------"
+    echo "Creating key:[${KEY_TITLE}] from repo:[${REPO_NAME}] with title:[${KEY_TITLE}]"
+    echo "KEY_VALUE:[${KEY_VALUE}]"
+    echo "KEY_READ_ONLY:[${KEY_READ_ONLY}]"
+  } >> "${LOG_FILE}"
 
   # Need to call the API to add the github deploy key
   # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
@@ -708,16 +722,20 @@ AddKeyToRepo() {
     echo "Error adding key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
     echo "Error Code:[${ERROR_CODE}]"
     echo "Error Message:[${ADD_CMD}]"
-    echo "Failed to add key" >> "${LOG_FILE}"
-    echo "Error Code:[${ERROR_CODE}]" >> "${LOG_FILE}"
-    echo "Error Message:[${ADD_CMD}]" >> "${LOG_FILE}"
-    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    {
+      echo "Failed to add key"
+      echo "Error Code:[${ERROR_CODE}]"
+      echo "Error Message:[${ADD_CMD}]"
+      echo "----------------------------------------------------"
+    } >> "${LOG_FILE}"
     exit 1
   else
     echo "----------------------------------------------------"
     echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
-    echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]" >> "${LOG_FILE}"
-    echo "----------------------------------------------------" >> "${LOG_FILE}"
+    {
+      echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
+      echo "----------------------------------------------------"
+    } >> "${LOG_FILE}"
     # Increment the counter
     ADD_COUNT=$((ADD_COUNT+1))
   fi
