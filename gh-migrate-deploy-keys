@@ -122,6 +122,11 @@ GITHUB_API_URL='https://api.github.com' # Set to default GitHub API URL
 LOG_DIR="$(pwd)"   # Set to default log directory
 EPOCH_TIME=$(date +%s)                  # Set to current epoch time
 LOG_FILE="${LOG_DIR}/gh-migrate-deploy-keys-${EPOCH_TIME}.log" # Set to default log file name
+SLEEP='300'                             # Number of seconds to sleep if out of API calls
+SLEEP_RETRY_COUNT='15'                  # Number of times to try to sleep before giving up
+SLEEP_COUNTER='0'                       # Counter of how many times we have gone to sleep
+API_REMAINING=0                         # Number of API calls remaining
+API_LIMIT_REMAINING=0                   # Number of API calls remaining before we hit the limit
 ###########
 # GLOBALS #
 ###########
@@ -165,6 +170,73 @@ ValidateJQ() {
     echo "If this is Centos, run command: yum install jq"
     echo "Once installed, please run this script again."
     exit 1
+  fi
+}
+################################################################################
+#### Function CheckAPILimit ####################################################
+CheckAPILimit() {
+  ##############################################################
+  # Check what is remaining, and if 0, we need to sleep it off #
+  ##############################################################
+  API_REMAINING_REQUEST=$(curl -s -X GET \
+    --url "${GITHUB_API_URL}/rate_limit" \
+    -H "Authorization: Bearer ${GITHUB_TOKEN}")
+
+  Debug "DEBUG --- API REMAINING DATA BLOCK:"
+  DebugJQ "${API_REMAINING_REQUEST}"
+
+  API_REMAINING_MESSAGE=$(echo "${API_REMAINING_REQUEST}" \
+    | jq -r '.message' 2>&1)
+
+  if [[ "${API_REMAINING_MESSAGE}" != "Rate limiting is not enabled." ]]; then
+    API_REMAINING=$(echo "${API_REMAINING_REQUEST}" \
+      | jq -r '.resources.graphql.remaining' 2>&1);
+  else
+    API_REMAINING=9999999999
+  fi
+
+  #######################
+  # Load the error code #
+  #######################
+  ERROR_CODE=$?
+
+  ##############################
+  # Check the shell for errors #
+  ##############################
+  if [ "${ERROR_CODE}" -ne 0 ]; then
+    echo  "ERROR! Failed to get valid response back from GitHub API!"
+    echo "ERROR:[${API_REMAINING}]"
+    exit 1
+  fi
+
+  ##########################################
+  # Check to see if we have API calls left #
+  ##########################################
+  if [[ "${API_REMAINING}" -eq 0 ]]; then
+    # Increment the sleep counter
+    ((SLEEP_COUNTER++))
+    # Warn the user
+    echo "WARN! We have run out of GrahpQL calls and need to sleep!"
+    echo "Sleeping for ${SLEEP} seconds before next check"
+    # Check if we have slept enough
+    if [ "${SLEEP_COUNTER}" -gt "${SLEEP_RETRY_COUNT}" ]; then
+      # We have been doing this too long
+      echo "ERROR! We have tried to wait for:[$SLEEP_RETRY_COUNT] attempts!"
+      echo "ERROR! We only sleep for:[${SLEEP_COUNTER}] attempts!"
+      echo "Bailing out!"
+      exit 1
+    else
+      # Get some sleep...
+      sleep "${SLEEP}"
+    fi
+  elif [[ "${API_REMAINING}" == 9999999999 ]]; then
+    echo "API rate limiting is not enabled."
+    # Set API limit remaining to the value we have
+    API_LIMIT_REMAINING="${API_REMAINING}"
+  else
+    echo "[${API_REMAINING}] API attempts remaining..."
+    # Set API limit remaining to the value we have
+    API_LIMIT_REMAINING="${API_REMAINING}"
   fi
 }
 ################################################################################
@@ -589,48 +661,55 @@ DeleteKeyFromRepo() {
   KEY_ID="${4}"
   KEY_VALUE="${5}"
 
-  echo "----------------------------------------------------"
-  echo "Deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
-
-  # Write the information to the log file
-  {
-    echo "----------------------------------------------------"
-    echo "Deleting key:[${KEY_TITLE}] from repo:[${ORG_NAME}/${REPO_NAME}] with title:[${KEY_TITLE}]"
-    echo "KEY_ID:[${KEY_ID}]"
-    echo "KEY_VALUE:[${KEY_VALUE}]"
-  } >> "${LOG_FILE}"
-
-  # Need to call the API to delete the github deploy key
-  # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
-  DELETE_CMD=$(curl --fail -s -X DELETE \
-    -H "Accept: application/vnd.github.v3+json" \
-    -H "Authorization: token ${SOURCE_TOKEN}" \
-    "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys/${KEY_ID}" 2>&1)
-
-  # Check for errors
-  ERROR_CODE=$?
-
-  if [ "${ERROR_CODE}" -ne 0 ]; then
-    echo "----------------------------------------------------"
-    echo "Error deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
-    echo "Error Code:[${ERROR_CODE}]"
-    echo "Error Message:[${DELETE_CMD}]"
-    {
-      echo "Failed to delete key"
-      echo "Error Code:[${ERROR_CODE}]"
-      echo "Error Message:[${DELETE_CMD}]"
-      echo "----------------------------------------------------"
-    } >> "${LOG_FILE}"
-    exit 1
+  # Check if we have api limit avilable
+  if [ "${API_LIMIT_REMAINING}" -eq 0 ]; then
+    # Call check api to wait for the limit to reset
+    CheckApiLimit
   else
     echo "----------------------------------------------------"
-    echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+    echo "Deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+
+    # Write the information to the log file
     {
-      echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
       echo "----------------------------------------------------"
+      echo "Deleting key:[${KEY_TITLE}] from repo:[${ORG_NAME}/${REPO_NAME}] with title:[${KEY_TITLE}]"
+      echo "KEY_ID:[${KEY_ID}]"
+      echo "KEY_VALUE:[${KEY_VALUE}]"
     } >> "${LOG_FILE}"
-    # Increment the counter
-    KEYS_DELETED=$((KEYS_DELETED+1))
+
+    # Need to call the API to delete the github deploy key
+    # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
+    DELETE_CMD=$(curl --fail -s -X DELETE \
+      -H "Accept: application/vnd.github.v3+json" \
+      -H "Authorization: token ${SOURCE_TOKEN}" \
+      "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys/${KEY_ID}" 2>&1)
+
+    # Check for errors
+    ERROR_CODE=$?
+
+    if [ "${ERROR_CODE}" -ne 0 ]; then
+      echo "----------------------------------------------------"
+      echo "Error deleting key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+      echo "Error Code:[${ERROR_CODE}]"
+      echo "Error Message:[${DELETE_CMD}]"
+      {
+        echo "Failed to delete key"
+        echo "Error Code:[${ERROR_CODE}]"
+        echo "Error Message:[${DELETE_CMD}]"
+        echo "----------------------------------------------------"
+      } >> "${LOG_FILE}"
+    else
+      echo "----------------------------------------------------"
+      echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+      # Decrement the API limit
+      API_LIMIT_REMAINING=$((API_LIMIT_REMAINING-1))
+      {
+        echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
+        echo "----------------------------------------------------"
+      } >> "${LOG_FILE}"
+      # Increment the counter
+      KEYS_DELETED=$((KEYS_DELETED+1))
+    fi
   fi
 }
 #################################################################################
@@ -699,47 +778,54 @@ AddKeyToRepo() {
   echo "KEY_VALUE:[${KEY_VALUE}]"
   echo "KEY_READ_ONLY:[${KEY_READ_ONLY}]"
 
-  # Write the information to the log file
-  {
-    echo "----------------------------------------------------"
-    echo "Creating key:[${KEY_TITLE}] from repo:[${REPO_NAME}] with title:[${KEY_TITLE}]"
-    echo "KEY_VALUE:[${KEY_VALUE}]"
-    echo "KEY_READ_ONLY:[${KEY_READ_ONLY}]"
-  } >> "${LOG_FILE}"
-
-  # Need to call the API to add the github deploy key
-  # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
-  ADD_CMD=$(curl --fail -s -X POST \
-    -H "Accept: application/vnd.github.v3+json" \
-    -H "Authorization: token ${DESTINATION_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d "{\"title\":\"${KEY_TITLE}\",\"key\":\"${KEY_VALUE}\",\"read_only\": ${KEY_READ_ONLY}}" \
-    "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys" 2>&1)
-  
-  # Check for errors
-  ERROR_CODE=$?
-
-  if [ "${ERROR_CODE}" -ne 0 ]; then
-    echo "----------------------------------------------------"
-    echo "Error adding key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
-    echo "Error Code:[${ERROR_CODE}]"
-    echo "Error Message:[${ADD_CMD}]"
+  # Check if we have api limit avilable
+  if [ "${API_LIMIT_REMAINING}" -eq 0 ]; then
+    # Call check api to wait for the limit to reset
+    CheckApiLimit
+  else
+    # Write the information to the log file
     {
-      echo "Failed to add key"
+      echo "----------------------------------------------------"
+      echo "Creating key:[${KEY_TITLE}] from repo:[${REPO_NAME}] with title:[${KEY_TITLE}]"
+      echo "KEY_VALUE:[${KEY_VALUE}]"
+      echo "KEY_READ_ONLY:[${KEY_READ_ONLY}]"
+    } >> "${LOG_FILE}"
+
+    # Need to call the API to add the github deploy key
+    # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
+    ADD_CMD=$(curl --fail -s -X POST \
+      -H "Accept: application/vnd.github.v3+json" \
+      -H "Authorization: token ${DESTINATION_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "{\"title\":\"${KEY_TITLE}\",\"key\":\"${KEY_VALUE}\",\"read_only\": ${KEY_READ_ONLY}}" \
+      "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys" 2>&1)
+    
+    # Check for errors
+    ERROR_CODE=$?
+
+    if [ "${ERROR_CODE}" -ne 0 ]; then
+      echo "----------------------------------------------------"
+      echo "Error adding key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
       echo "Error Code:[${ERROR_CODE}]"
       echo "Error Message:[${ADD_CMD}]"
+      {
+        echo "Failed to add key"
+        echo "Error Code:[${ERROR_CODE}]"
+        echo "Error Message:[${ADD_CMD}]"
+        echo "----------------------------------------------------"
+      } >> "${LOG_FILE}"
+    else
       echo "----------------------------------------------------"
-    } >> "${LOG_FILE}"
-    exit 1
-  else
-    echo "----------------------------------------------------"
-    echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
-    {
       echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
-      echo "----------------------------------------------------"
-    } >> "${LOG_FILE}"
-    # Increment the counter
-    KEYS_CREATED=$((KEYS_CREATED+1))
+      # Decrement the API limit
+      API_LIMIT_REMAINING=$((API_LIMIT_REMAINING-1))
+      {
+        echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
+        echo "----------------------------------------------------"
+      } >> "${LOG_FILE}"
+      # Increment the counter
+      KEYS_CREATED=$((KEYS_CREATED+1))
+    fi
   fi
 }
 ################################################################################
@@ -772,28 +858,8 @@ GetKeyID() {
   echo "${KEY_ID}"
 }
 ################################################################################
-############################## MAIN ############################################
-################################################################################
-
-##########
-# Header #
-##########
-Header
-
-#####################################
-# Validate we have enough arguments #
-#####################################
-ValidateArgs
-
-#########################
-# Validate JQ installed #
-#########################
-ValidateJQ
-
-#####################################
-# Check if were using an input file #
-#####################################
-if [[ -n "${INPUT_FILE_NAME}" ]]; then
+#### Function ReadInputFile ####################################################
+ReadInputFile() {
   # Read in the input file and parse the lines
   while read -r LINE; do
     #############################################
@@ -818,6 +884,9 @@ if [[ -n "${INPUT_FILE_NAME}" ]]; then
     # Create array of deploy keys returned from GetDeployKeysFromRepo
     mapfile -t KEYS_ARRAY < <(GetDeployKeysFromRepo "${ORG_NAME}" "${REPO_NAME}")
 
+    # Check the api limit
+    CheckAPILimit
+
     # Check if the array is empty
     if [ "${#KEYS_ARRAY[@]}" -eq 0 ]; then
       echo "----------------------------------------------------"
@@ -826,6 +895,14 @@ if [[ -n "${INPUT_FILE_NAME}" ]]; then
       echo "----------------------------------------------------" >> "${LOG_FILE}"
       exit 2
     else
+      # Count how many keys are in the array
+      KEYS_COUNT="${#KEYS_ARRAY[@]}"
+      # Check if more keys than api limit
+      if [ "${KEYS_COUNT}" -gt "${API_LIMIT}" ]; then
+        echo "There are more keys:[${KEYS_COUNT}] than the API limit:[${API_LIMIT}]"
+        echo "Please extend your API limit or create less keys"
+        exit 1
+      fi
       # Loop through the array and add the keys
       for KEY in "${KEYS_ARRAY[@]}"; do
         # Split the key into the title and value
@@ -842,14 +919,12 @@ if [[ -n "${INPUT_FILE_NAME}" ]]; then
       done
     fi
   done < "${INPUT_FILE_NAME}"
-else
-  # Get the list of all repos in the source org
-  GetAllSourceRepos
-  # Get the list of all repos in the destination org
-  GetAllDestinationRepos
-  # Loop through the repos and generate list of repos to update
-  GenerateUpdateList
-
+}
+################################################################################
+#### Function ParseUpdateArray #################################################
+ParseUpdateArray() {
+  # Check the API limit
+  CheckAPILimit
   # Loop through the list of repos and update the visibility
   for OBJECT in "${UPDATE_ARRAY[@]}"; do
    # Create string for UPDATE_ARRAY
@@ -885,6 +960,54 @@ else
     Debug "Adding key to destination repo"
     AddKeyToRepo "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${SOURCE_KEY_TITLE}" "${DESTINATION_KEY_VALUE}" "${SOURCE_KEY_READ_ONLY}"
   done
+}
+################################################################################
+############################## MAIN ############################################
+################################################################################
+
+##########
+# Header #
+##########
+Header
+
+#####################################
+# Validate we have enough arguments #
+#####################################
+ValidateArgs
+
+#########################
+# Validate JQ installed #
+#########################
+ValidateJQ
+
+#####################################
+# Check if were using an input file #
+#####################################
+if [[ -n "${INPUT_FILE_NAME}" ]]; then
+  ################################
+  # Read the input file for data #
+  ################################
+  ReadInputFile
+else
+  ###############################################
+  # Get the list of all repos in the source org #
+  ###############################################
+  GetAllSourceRepos
+
+  ####################################################
+  # Get the list of all repos in the destination org #
+  ####################################################
+  GetAllDestinationRepos
+
+  ###############################################################
+  # Loop through the repos and generate list of repos to update #
+  ###############################################################
+  GenerateUpdateList
+
+  ###############################################
+  # Parse the update array and update the repos #
+  ###############################################
+  ParseUpdateArray
 fi
 
 ##########
