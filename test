@@ -1,0 +1,20 @@
+[
+	{
+		"id": 67781633,
+		"key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJvgIMoM2nhGMr4ySKvuiuw5NftSvNnJ/flrQ56JgKZr",
+		"url": "https://api.github.com/repos/LukasTestOrg1/repo1/keys/67781633",
+		"title": "cool key",
+		"verified": true,
+		"created_at": "2022-06-23T17:22:08Z",
+		"read_only": false
+	},
+	{
+		"id": 67820300,
+		"key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOvNXwEO4VumiiqDtyDUlYTLuIDpcNLDNupVxZqZt6x/",
+		"url": "https://api.github.com/repos/LukasTestOrg1/repo1/keys/67820300",
+		"title": "key2",
+		"verified": true,
+		"created_at": "2022-06-24T15:48:15Z",
+		"read_only": false
+	}
+]
