@@ -854,6 +854,9 @@ GetKeyID() {
   # Parse the key ID
   KEY_ID=$(echo "${GET_KEYS_CMD}" | jq -r '.[] | select(.title == "'"${KEY_TITLE}"'") | .id')
 
+  # Decrement the API limit
+  API_LIMIT_REMAINING=$((API_LIMIT_REMAINING-1))
+
   # Return the key ID
   echo "${KEY_ID}"
 }
