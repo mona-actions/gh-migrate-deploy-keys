@@ -967,8 +967,10 @@ ReadInputFile() {
     if [ "${#KEYS_ARRAY[@]}" -eq 0 ]; then
       echo "----------------------------------------------------"
       echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]"
-      echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]" >> "${LOG_FILE}"
-      echo "----------------------------------------------------" >> "${LOG_FILE}"
+      {
+        echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]"
+        echo "----------------------------------------------------"
+      } >> "${LOG_FILE}"
       exit 2
     else
       # Count how many keys are in the array
@@ -1042,18 +1044,18 @@ ParseUpdateArray() {
     fi
 
     # Variables to pass to parallel script
-    # SOURCE_ORG_NAME="\$1"
-    # SOURCE_REPO_NAME="\$2"
-    # SOURCE_TOKEN="\$3"
-    # DESTINATION_ORG_NAME="\$4"
-    # DESTINATION_REPO_NAME="\$5"
-    # DESTINATION_TOKEN="\$6"
-    # KEY_TITLE="\$7"
-    # KEY_ID="\$8"
-    # KEY_VALUE="\$9"
-    # KEY_READ_ONLY="\$10"
-    # LOG_FILE="\$11"
-    # GITHUB_API_URL="\$12"
+    # SOURCE_ORG_NAME="${1}"
+    # SOURCE_REPO_NAME="${2}"
+    # SOURCE_TOKEN="${3}"
+    # DESTINATION_ORG_NAME="${4}"
+    # DESTINATION_REPO_NAME="${5}"
+    # DESTINATION_TOKEN="${6}"
+    # KEY_TITLE="${7}"
+    # KEY_ID="${8}"
+    # KEY_VALUE="${9}"
+    # KEY_READ_ONLY="${10}"
+    # LOG_FILE="${11}"
+    # GITHUB_API_URL="${12}"
 
     # Check if parallel is true
     if [ "${PARALLEL}" == "true" ]; then
@@ -1100,18 +1102,18 @@ CreateParallelFile() {
   cat >"gh-migrate-deploy-keys-parallel.sh" <<EOL
 #!/bin/bash
  
-SOURCE_ORG_NAME="\$1"
-SOURCE_REPO_NAME="\$2"
-SOURCE_TOKEN="\$3"
-DESTINATION_ORG_NAME="\$4"
-DESTINATION_REPO_NAME="\$5"
-DESTINATION_TOKEN="\$6"
-KEY_TITLE="\$7"
-KEY_ID="\$8"
-KEY_VALUE="\$9"
-KEY_READ_ONLY="\$10"
-LOG_FILE="\$11"
-GITHUB_API_URL="\$12"
+SOURCE_ORG_NAME="\${1}"
+SOURCE_REPO_NAME="\${2}"
+SOURCE_TOKEN="\${3}"
+DESTINATION_ORG_NAME="\${4}"
+DESTINATION_REPO_NAME="\${5}"
+DESTINATION_TOKEN="\${6}"
+KEY_TITLE="\${7}"
+KEY_ID="\${8}"
+KEY_VALUE="\${9}"
+KEY_READ_ONLY="\${10}"
+LOG_FILE="\${11}"
+GITHUB_API_URL="\${12}"
 
 ################################################################################
 ######################### FUNCTIONS BELOW ######################################

@@ -1,7 +1,4 @@
 # Ignore any csv files that may get uploaded 
 *.csv
-<<<<<<< HEAD
 *.log
-=======
-*.log
->>>>>>> main
+*.sh
