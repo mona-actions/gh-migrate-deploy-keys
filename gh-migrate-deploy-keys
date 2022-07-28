@@ -36,8 +36,9 @@ Usage: gh migrate-deploy-keys [options]
 Options:
     -h, --help                    : Show script help
     -d, --debug                   : Enable Debug logging
-    -i, --input                   : Set path to a file with a list of Org/Repo,visibility,template to update, one per line
-    -dt, --destination-token      :  Set Personal Access Token with repo scope to destination Organization
+    -i, --input-file              : Set path to a file with a list of Org/Repo,(true|false), one per line, to migrate keys
+                                     true|false is for the deploy key READ_ONLY permissions.
+    -dt, --destination-token      : Set Personal Access Token with repo scope to destination Organization
     -st, --source-token           : Set Personal Access Token with repo scope to original Organization
     -p, --repo-page-size          : Set the pagination size for the initial repository GraphQL query - defaults to 20
                                     If a timeout occurs, reduce this value
@@ -76,7 +77,7 @@ while (( "$#" )); do
       SOURCE_TOKEN=$2
       shift 2
       ;;
-    -i|--input)
+    -i|--input-file)
       INPUT_FILE_NAME=$2
       shift 2
       ;;
@@ -137,6 +138,8 @@ DESTINATION_REPO_ARRAY=() # Array of destination repo names
 UPDATE_ARRAY=()           # Array of repos to update
 KEYS_CREATED=0            # Number of keys created
 KEYS_DELETED=0            # Number of keys deleted
+PARALLEL=0                # If we can run in parallel
+MAX_PARALLEL=6            # Maximum number of parallel processes to run
 
 ################################################################################
 ############################ FUNCTIONS #########################################
@@ -964,8 +967,10 @@ ReadInputFile() {
     if [ "${#KEYS_ARRAY[@]}" -eq 0 ]; then
       echo "----------------------------------------------------"
       echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]"
-      echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]" >> "${LOG_FILE}"
-      echo "----------------------------------------------------" >> "${LOG_FILE}"
+      {
+        echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]"
+        echo "----------------------------------------------------"
+      } >> "${LOG_FILE}"
       exit 2
     else
       # Count how many keys are in the array
@@ -983,13 +988,24 @@ ReadInputFile() {
         KEY_ID=$(echo "${KEY}" | cut -d'|' -f2)
         KEY_VALUE=$(echo "${KEY}" | cut -d'|' -f3)
        
-        Debug "Deleting key from source repo"
-        DeleteKeyFromRepo "${ORG_NAME}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}"
+        # Check if parallel is true
+        if [ "${PARALLEL}" == "true" ]; then
+          Debug "running in parallel"
+          sem -j"${MAX_PARALLEL}" "./gh-migrate-deploy-keys-parallel.sh" "${ORG_NAME}" "${REPO_NAME}" "${SOURCE_TOKEN}" "${DESTINATION_ORG}" "${REPO_NAME}" "${DESTINATION_TOKEN}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}" "${LOG_FILE}" "${GITHUB_API_URL}"
+        else
+          Debug "Deleting key from source repo"
+          DeleteKeyFromRepo "${ORG_NAME}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}"
 
-        # Add the key to the repo
-        Debug "Adding key:[${KEY_TITLE}] to repo:[${ORG_NAME}/${REPO_NAME}]"
-        AddKeyToRepo "${DESTINATION_ORG}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_VALUE}"
+          # Add the key to the repo
+          Debug "Adding key:[${KEY_TITLE}] to repo:[${ORG_NAME}/${REPO_NAME}]"
+          AddKeyToRepo "${DESTINATION_ORG}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_VALUE}"
+        fi
       done
+      # Wait for all the jobs to finish
+      if [ "${PARALLEL}" -eq 1 ]; then
+        # Wait for all the jobs to finish
+        sem --wait
+      fi
     fi
   done < "${INPUT_FILE_NAME}"
 }
@@ -1027,13 +1043,200 @@ ParseUpdateArray() {
       exit 2
     fi
 
-    Debug "Deleting key from source repo"
-    DeleteKeyFromRepo "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}" "${DESTINATION_KEY_VALUE}"
+    # Variables to pass to parallel script
+    # SOURCE_ORG_NAME="${1}"
+    # SOURCE_REPO_NAME="${2}"
+    # SOURCE_TOKEN="${3}"
+    # DESTINATION_ORG_NAME="${4}"
+    # DESTINATION_REPO_NAME="${5}"
+    # DESTINATION_TOKEN="${6}"
+    # KEY_TITLE="${7}"
+    # KEY_ID="${8}"
+    # KEY_VALUE="${9}"
+    # KEY_READ_ONLY="${10}"
+    # LOG_FILE="${11}"
+    # GITHUB_API_URL="${12}"
 
-    # We need to add the key to the destination repo
-    Debug "Adding key to destination repo"
-    AddKeyToRepo "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${SOURCE_KEY_TITLE}" "${DESTINATION_KEY_VALUE}" "${SOURCE_KEY_READ_ONLY}"
+    # Check if parallel is true
+    if [ "${PARALLEL}" == "true" ]; then
+      Debug "running in parallel"
+      # Run the parallel script
+      sem -j"${MAX_PARALLEL}" "./gh-migrate-deploy-keys-parallel.sh" "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_TOKEN}" "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${DESTINATION_TOKEN}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}" "${DESTINATION_KEY_VALUE}" "${LOG_FILE}" "${GITHUB_API_URL}"
+    else
+      Debug "Deleting key from source repo"
+      DeleteKeyFromRepo "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}" "${DESTINATION_KEY_VALUE}"
+
+      # We need to add the key to the destination repo
+      Debug "Adding key to destination repo"
+      AddKeyToRepo "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${SOURCE_KEY_TITLE}" "${DESTINATION_KEY_VALUE}" "${SOURCE_KEY_READ_ONLY}"
+    fi
   done
+
+  # Wait for all the jobs to finish
+  if [ "${PARALLEL}" -eq 1 ]; then
+    # Wait for all the jobs to finish
+    sem --wait
+  fi
+}
+################################################################################
+#### Function ValidateSem ######################################################
+ValidateSem() {
+  # Need to validate the machine has sem installed as we use it to do the
+  #  actual work.
+  if ! sem --version &>/dev/null
+  then
+    echo "Failed to find GNU sem in the path!"
+    echo "https://www.gnu.org/software/parallel/"
+    echo "This can be used to parallel the calls to the GitHub API."
+    echo "without sem, we will have to do it serially."
+  else
+    PARALLEL=1
+    # Create the file to run the parallel calls
+    CreateParallelFile
+  fi
+}
+################################################################################
+#### Function CreateParallelFile ###############################################
+CreateParallelFile() {
+  # Create the file to run the parallel calls
+  cat >"gh-migrate-deploy-keys-parallel.sh" <<EOL
+#!/bin/bash
+ 
+SOURCE_ORG_NAME="\${1}"
+SOURCE_REPO_NAME="\${2}"
+SOURCE_TOKEN="\${3}"
+DESTINATION_ORG_NAME="\${4}"
+DESTINATION_REPO_NAME="\${5}"
+DESTINATION_TOKEN="\${6}"
+KEY_TITLE="\${7}"
+KEY_ID="\${8}"
+KEY_VALUE="\${9}"
+KEY_READ_ONLY="\${10}"
+LOG_FILE="\${11}"
+GITHUB_API_URL="\${12}"
+
+################################################################################
+######################### FUNCTIONS BELOW ######################################
+################################################################################
+################################################################################
+#### Function DeleteKeyFromRepo ################################################
+DeleteKeyFromRepo() {
+  # Pull in input vars
+  ORG_NAME="\${1}"
+  REPO_NAME="\${2}"
+  KEY_TITLE="\${3}"
+  KEY_ID="\${4}"
+  KEY_VALUE="\${5}"
+
+  echo "----------------------------------------------------"
+  echo "Deleting key:[\${KEY_TITLE}] from repo:[\${REPO_NAME}]"
+
+  # Write the information to the log file
+  {
+    echo "----------------------------------------------------"
+    echo "Deleting key:[\${KEY_TITLE}] from repo:[\${ORG_NAME}/\${REPO_NAME}] with title:[\${KEY_TITLE}]"
+    echo "KEY_ID:[\${KEY_ID}]"
+    echo "KEY_VALUE:[\${KEY_VALUE}]"
+  } >> "\${LOG_FILE}"
+
+  # Need to call the API to delete the github deploy key
+  # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
+  DELETE_CMD=$(curl --fail -s -X DELETE \
+    -H "Accept: application/vnd.github.v3+json" \
+    -H "Authorization: token \${SOURCE_TOKEN}" \
+    "\${GITHUB_API_URL}/repos/\${ORG_NAME}/\${REPO_NAME}/keys/\${KEY_ID}" 2>&1)
+
+  # Check for errors
+  ERROR_CODE=\$?
+
+  if [ "\${ERROR_CODE}" -ne 0 ]; then
+    echo "----------------------------------------------------"
+    echo "Error deleting key:[\${KEY_TITLE}] from repo:[\${REPO_NAME}]"
+    echo "Error Code:[\${ERROR_CODE}]"
+    echo "Error Message:[\${DELETE_CMD}]"
+    {
+      echo "Failed to delete key"
+      echo "Error Code:[\${ERROR_CODE}]"
+      echo "Error Message:[\${DELETE_CMD}]"
+      echo "----------------------------------------------------"
+    } >> "\${LOG_FILE}"
+  else
+    echo "----------------------------------------------------"
+    echo "Successfully deleted key:[\${KEY_TITLE}] from repo:[\${REPO_NAME}]"
+    {
+      echo "Successfully deleted key:[\${KEY_TITLE}] from repo:[\${REPO_NAME}]"
+      echo "----------------------------------------------------"
+    } >> "\${LOG_FILE}"
+  fi
+}
+################################################################################
+#### Function AddKeyToRepo #####################################################
+AddKeyToRepo() {
+  # Pull in vars
+  ORG_NAME="\${1}"
+  REPO_NAME="\${2}"
+  KEY_TITLE="\${3}"
+  KEY_VALUE="\${4}"
+  KEY_READ_ONLY="\${5}"
+
+  echo "----------------------------------------------------"
+  echo "Adding key:[\${KEY_TITLE}] to repo:[\${ORG_NAME}/\${REPO_NAME}]"
+  echo "KEY_VALUE:[\${KEY_VALUE}]"
+  echo "KEY_READ_ONLY:[\${KEY_READ_ONLY}]"
+
+  # Write the information to the log file
+  {
+    echo "----------------------------------------------------"
+    echo "Creating key:[\${KEY_TITLE}] from repo:[\${REPO_NAME}] with title:[\${KEY_TITLE}]"
+    echo "KEY_VALUE:[\${KEY_VALUE}]"
+    echo "KEY_READ_ONLY:[\${KEY_READ_ONLY}]"
+  } >> "\${LOG_FILE}"
+
+  # Need to call the API to add the github deploy key
+  # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
+  ADD_CMD=$(curl --fail -s -X POST \
+    -H "Accept: application/vnd.github.v3+json" \
+    -H "Authorization: token \${DESTINATION_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"title\":\"\${KEY_TITLE}\",\"key\":\"\${KEY_VALUE}\",\"read_only\": \${KEY_READ_ONLY}}" \
+    "\${GITHUB_API_URL}/repos/\${ORG_NAME}/\${REPO_NAME}/keys" 2>&1)
+  
+  # Check for errors
+  ERROR_CODE=\$?
+
+  if [ "\${ERROR_CODE}" -ne 0 ]; then
+    echo "----------------------------------------------------"
+    echo "Error adding key:[\${KEY_TITLE}] to repo:[\${REPO_NAME}]"
+    echo "Error Code:[\${ERROR_CODE}]"
+    echo "Error Message:[\${ADD_CMD}]"
+    {
+      echo "Failed to add key"
+      echo "Error Code:[\${ERROR_CODE}]"
+      echo "Error Message:[\${ADD_CMD}]"
+      echo "----------------------------------------------------"
+    } >> "\${LOG_FILE}"
+  else
+    echo "----------------------------------------------------"
+    echo "Successfully added key:[\${KEY_TITLE}] to repo:[\${REPO_NAME}]"
+    {
+      echo "Successfully added key:[\${KEY_TITLE}] to repo:[\${REPO_NAME}]"
+      echo "----------------------------------------------------"
+    } >> "\${LOG_FILE}"
+  fi
+}
+################################################################################
+################################ MAIN ##########################################
+################################################################################
+
+# Delete the key from the source repo
+DeleteKeyFromRepo "\${SOURCE_ORG_NAME}" "\${SOURCE_REPO_NAME}" "\${KEY_TITLE}" "\${KEY_ID}" "\${KEY_VALUE}"
+
+# Add the key to the destination repo
+AddKeyToRepo "\${DESTINATION_ORG_NAME}" "\${DESTINATION_REPO_NAME}" "\${KEY_TITLE}" "\${KEY_VALUE}" "\${KEY_READ_ONLY}"
+EOL
+
+  # Make the file executable
+  chmod +x "gh-migrate-deploy-keys-parallel.sh"
 }
 ################################################################################
 ############################## MAIN ############################################
@@ -1053,6 +1256,11 @@ ValidateArgs
 # Validate JQ installed #
 #########################
 ValidateJQ
+
+#############################################
+# Validate if sem is installed for parallel #
+#############################################
+ValidateSem
 
 #####################################
 # Check if were using an input file #
