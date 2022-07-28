@@ -989,7 +989,7 @@ ReadInputFile() {
         # Check if parallel is true
         if [ "${PARALLEL}" == "true" ]; then
           Debug "running in parallel"
-          sem -j ${PARALLEL_COUNT} "./gh-migrate-deploy-keys-parallel.sh" "${ORG_NAME}" "${REPO_NAME}" "${SOURCE_TOKEN}" "${DESTINATION_ORG}" "${REPO_NAME}" "${DESTINATION_TOKEN}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}" "${LOG_FILE}" "${GITHUB_API_URL}"
+          sem -j"${MAX_PARALLEL}" "./gh-migrate-deploy-keys-parallel.sh" "${ORG_NAME}" "${REPO_NAME}" "${SOURCE_TOKEN}" "${DESTINATION_ORG}" "${REPO_NAME}" "${DESTINATION_TOKEN}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}" "${LOG_FILE}" "${GITHUB_API_URL}"
         else
           Debug "Deleting key from source repo"
           DeleteKeyFromRepo "${ORG_NAME}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}"
@@ -1059,7 +1059,7 @@ ParseUpdateArray() {
     if [ "${PARALLEL}" == "true" ]; then
       Debug "running in parallel"
       # Run the parallel script
-      sem -j ${PARALLEL_COUNT} "./gh-migrate-deploy-keys-parallel.sh" "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_TOKEN}" "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${DESTINATION_TOKEN}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}" "${DESTINATION_KEY_VALUE}" "${LOG_FILE}" "${GITHUB_API_URL}"
+      sem -j"${MAX_PARALLEL}" "./gh-migrate-deploy-keys-parallel.sh" "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_TOKEN}" "${DESTINATION_ORG}" "${DESTINATION_REPO}" "${DESTINATION_TOKEN}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}" "${DESTINATION_KEY_VALUE}" "${LOG_FILE}" "${GITHUB_API_URL}"
     else
       Debug "Deleting key from source repo"
       DeleteKeyFromRepo "${SOURCE_ORG}" "${SOURCE_REPO}" "${SOURCE_KEY_TITLE}" "${SOURCE_KEY_ID}" "${DESTINATION_KEY_VALUE}"
