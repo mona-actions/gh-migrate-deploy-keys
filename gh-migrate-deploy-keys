@@ -1156,7 +1156,7 @@ DeleteKeyFromRepo() {
 
   # Need to call the API to delete the github deploy key
   # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
-  DELETE_CMD=$(curl --fail -s -X DELETE \
+  DELETE_CMD=$(curl --fail -k -s -X DELETE \
     --connect-timeout 5 \
     --max-time 10 \
     --retry 5 \
@@ -1214,7 +1214,7 @@ AddKeyToRepo() {
 
   # Need to call the API to add the github deploy key
   # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
-  ADD_CMD=$(curl --fail -s -X POST \
+  ADD_CMD=$(curl --fail -k -s -X POST \
     --connect-timeout 5 \
     --max-time 10 \
     --retry 5 \
