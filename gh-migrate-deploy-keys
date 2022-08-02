@@ -752,6 +752,11 @@ DeleteKeyFromRepo() {
     # Need to call the API to delete the github deploy key
     # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
     DELETE_CMD=$(curl --fail -s -X DELETE \
+      --connect-timeout 5 \
+      --max-time 10 \
+      --retry 5 \
+      --retry-delay 2 \
+      --retry-max-time 40 \
       -H "Accept: application/vnd.github.v3+json" \
       -H "Authorization: token ${SOURCE_TOKEN}" \
       "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys/${KEY_ID}" 2>&1)
@@ -866,6 +871,11 @@ AddKeyToRepo() {
     # Need to call the API to add the github deploy key
     # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
     ADD_CMD=$(curl --fail -s -X POST \
+      --connect-timeout 5 \
+      --max-time 10 \
+      --retry 5 \
+      --retry-delay 2 \
+      --retry-max-time 40 \
       -H "Accept: application/vnd.github.v3+json" \
       -H "Authorization: token ${DESTINATION_TOKEN}" \
       -H "Content-Type: application/json" \
@@ -912,6 +922,11 @@ GetKeyID() {
   # Get the key ID
   # https://developer.github.com/v3/repos/keys/#get-a-specific-key
   GET_KEYS_CMD=$(curl --fail -s -X GET \
+    --connect-timeout 5 \
+    --max-time 10 \
+    --retry 5 \
+    --retry-delay 0 \
+    --retry-max-time 40 \
     -H "Accept: application/vnd.github.v3+json" \
     -H "Authorization: token ${SOURCE_TOKEN}" \
     "${GITHUB_API_URL}/repos/${ORG_NAME}/${REPO_NAME}/keys" 2>&1)
@@ -1142,6 +1157,11 @@ DeleteKeyFromRepo() {
   # Need to call the API to delete the github deploy key
   # https://developer.github.com/v3/repos/keys/#delete-a-deploy-key
   DELETE_CMD=$(curl --fail -s -X DELETE \
+    --connect-timeout 5 \
+    --max-time 10 \
+    --retry 5 \
+    --retry-delay 2 \
+    --retry-max-time 40 \
     -H "Accept: application/vnd.github.v3+json" \
     -H "Authorization: token \${SOURCE_TOKEN}" \
     "\${GITHUB_API_URL}/repos/\${ORG_NAME}/\${REPO_NAME}/keys/\${KEY_ID}" 2>&1)
@@ -1195,6 +1215,11 @@ AddKeyToRepo() {
   # Need to call the API to add the github deploy key
   # https://developer.github.com/v3/repos/keys/#add-a-deploy-key
   ADD_CMD=$(curl --fail -s -X POST \
+    --connect-timeout 5 \
+    --max-time 10 \
+    --retry 5 \
+    --retry-delay 2 \
+    --retry-max-time 40 \
     -H "Accept: application/vnd.github.v3+json" \
     -H "Authorization: token \${DESTINATION_TOKEN}" \
     -H "Content-Type: application/json" \
