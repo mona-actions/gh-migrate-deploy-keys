@@ -956,7 +956,7 @@ ReadInputFile() {
     # Split the line into the org and repo name #
     #############################################
     ORG_REPO_NAME=$(echo "${LINE}" | tr '[:upper:]' '[:lower:]')
-    ORG_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'/' -f1)
+    ORG_NAME=$SOURCE_ORG_NAME
     REPO_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'/' -f2)
     READ_ONLY=$(echo "${LINE}" | cut -d',' -f2)
 
