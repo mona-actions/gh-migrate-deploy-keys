@@ -36,7 +36,7 @@ If you set the `Is the key READ only` to `false`, it will make the key with `rea
 ### Output
 
 ```bash
-gh migrate-deploy-keys --destination-organization lukastestorg2 --destination-token <REDACTED> --source-organization lukastestorg1 --source-token <REDACTED>
+gh migrate-deploy-keys --destination-org lukastestorg2 --destination-token <REDACTED> --source-org lukastestorg1 --source-token <REDACTED>
 
 ######################################################
 ######################################################
