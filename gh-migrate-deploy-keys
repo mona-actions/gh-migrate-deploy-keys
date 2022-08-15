@@ -137,7 +137,9 @@ SOURCE_REPO_ARRAY=()      # Array of source repo names
 DESTINATION_REPO_ARRAY=() # Array of destination repo names
 UPDATE_ARRAY=()           # Array of repos to update
 KEYS_CREATED_SUCCESS=0    # Number of keys created
+KEYS_CREATED_FAILURE=0    # Number of keys created
 KEYS_DELETED_SUCCESS=0    # Number of keys deleted
+KEYS_DELETED_FAILURE=0    # Number of keys deleted
 PARALLEL=0                # If we can run in parallel
 MAX_PARALLEL=6            # Maximum number of parallel processes to run
 
@@ -353,8 +355,8 @@ Footer() {
   echo "Total Deploy Keys Created Successfully:[${KEYS_CREATED_SUCCESS}]"
   echo "Total Deploy Keys Deleted Successfully:[${KEYS_DELETED_SUCCESS}]"
   echo ""
-  echo "Total Deploy Keys Created that Failed:[${KEYS_CREATED_FAILED}]"
-  echo "Total Deploy Keys Deleted that Failed:[${KEYS_DELETED_FAILED}]"
+  echo "Total Deploy Keys Created that Failed:[${KEYS_CREATED_FAILURE}]"
+  echo "Total Deploy Keys Deleted that Failed:[${KEYS_DELETED_FAILURE}]"
   echo ""
 }
 ################################################################################
@@ -1098,9 +1100,9 @@ UpdateKeyCounts() {
   # Check if the log file exists
   if [ -f "${LOG_FILE}" ]; then
     # Get the number of keys added
-    KEYS_ADDED_SUCCESS=$(grep -c "Successfully added key" "${LOG_FILE}")
+    KEYS_CREATED_SUCCESS=$(grep -c "Successfully added key" "${LOG_FILE}")
     # Get the number of keys added with failures
-    KEYS_ADDED_FAILURE=$(grep -c "Failed to add key" "${LOG_FILE}")
+    KEYS_CREATED_FAILURE=$(grep -c "Failed to add key" "${LOG_FILE}")
     # Get the number of keys deleted
     KEYS_DELETED_SUCCESS=$(grep -c "Successfully deleted key" "${LOG_FILE}")
     # Get the number of keys deleted with failures
