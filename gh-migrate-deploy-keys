@@ -136,8 +136,8 @@ API_LIMIT_REMAINING_DESTINATION=0       # Number of API calls remaining before w
 SOURCE_REPO_ARRAY=()      # Array of source repo names
 DESTINATION_REPO_ARRAY=() # Array of destination repo names
 UPDATE_ARRAY=()           # Array of repos to update
-KEYS_CREATED=0            # Number of keys created
-KEYS_DELETED=0            # Number of keys deleted
+KEYS_CREATED_SUCCESS=0    # Number of keys created
+KEYS_DELETED_SUCCESS=0    # Number of keys deleted
 PARALLEL=0                # If we can run in parallel
 MAX_PARALLEL=6            # Maximum number of parallel processes to run
 
@@ -350,8 +350,11 @@ Footer() {
   echo "######################################################"
   echo "The script has completed"
   echo "######################################################"
-  echo "Total Deploy Keys Created:[${KEYS_CREATED}]"
-  echo "Total Deploy Keys Deleted:[${KEYS_DELETED}]"
+  echo "Total Deploy Keys Created Successfully:[${KEYS_CREATED_SUCCESS}]"
+  echo "Total Deploy Keys Deleted Successfully:[${KEYS_DELETED_SUCCESS}]"
+  echo ""
+  echo "Total Deploy Keys Created that Failed:[${KEYS_CREATED_FAILED}]"
+  echo "Total Deploy Keys Deleted that Failed:[${KEYS_DELETED_FAILED}]"
   echo ""
 }
 ################################################################################
@@ -784,8 +787,6 @@ DeleteKeyFromRepo() {
         echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
         echo "----------------------------------------------------"
       } >> "${LOG_FILE}"
-      # Increment the counter
-      KEYS_DELETED=$((KEYS_DELETED+1))
     fi
   fi
 }
@@ -905,8 +906,6 @@ AddKeyToRepo() {
         echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
         echo "----------------------------------------------------"
       } >> "${LOG_FILE}"
-      # Increment the counter
-      KEYS_CREATED=$((KEYS_CREATED+1))
     fi
   fi
 }
@@ -1083,6 +1082,33 @@ ParseUpdateArray() {
   if [ "${PARALLEL}" -eq 1 ]; then
     # Wait for all the jobs to finish
     sem --wait
+  fi
+}
+################################################################################
+#### Function UpdateKeyCounts ##################################################
+UpdateKeyCounts() {
+  # We need to parse the log file and get the number of keys added and deleted
+  # We also need to see if KEYS_CREATED_SUCCESS and KEYS_DELETED_SUCCESS are set and accurate
+  # Failed to delete key
+  # Successfully deleted key
+  #
+  # Failed to add key
+  # Successfully added key
+
+  # Check if the log file exists
+  if [ -f "${LOG_FILE}" ]; then
+    # Get the number of keys added
+    KEYS_ADDED_SUCCESS=$(grep -c "Successfully added key" "${LOG_FILE}")
+    # Get the number of keys added with failures
+    KEYS_ADDED_FAILURE=$(grep -c "Failed to add key" "${LOG_FILE}")
+    # Get the number of keys deleted
+    KEYS_DELETED_SUCCESS=$(grep -c "Successfully deleted key" "${LOG_FILE}")
+    # Get the number of keys deleted with failures
+    KEYS_DELETED_FAILURE=$(grep -c "Failed to delete key" "${LOG_FILE}")
+  else
+    # Failed to find log!
+    echo "Failed to find log file:[${LOG_FILE}]"
+    exit 1
   fi
 }
 ################################################################################
@@ -1308,6 +1334,11 @@ else
   ###############################################
   ParseUpdateArray
 fi
+
+#########################
+# Update the key counts #
+#########################
+UpdateKeyCounts
 
 ##########
 # Footer #
