@@ -14,6 +14,7 @@ You need to have the following to run this script successfully:
 - **GitHub Personal Access Token** with a scope of "repos" and access to the organization(s) that will be updated.
 - Either the name of the organizations to be synced/migrated, or a file containing the names of the repositories to be updated
 - **jq** installed on the machine running the query
+- [sem](https://www.gnu.org/software/parallel/) installable on ubuntu via `sudo apt-get install parallel`
 
 ## Input file
 
