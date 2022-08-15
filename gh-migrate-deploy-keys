@@ -354,7 +354,6 @@ Footer() {
   echo "######################################################"
   echo "Total Deploy Keys Created Successfully:[${KEYS_CREATED_SUCCESS}]"
   echo "Total Deploy Keys Deleted Successfully:[${KEYS_DELETED_SUCCESS}]"
-  echo ""
   echo "Total Deploy Keys Created that Failed:[${KEYS_CREATED_FAILURE}]"
   echo "Total Deploy Keys Deleted that Failed:[${KEYS_DELETED_FAILURE}]"
   echo ""
@@ -1084,6 +1083,12 @@ ParseUpdateArray() {
   if [ "${PARALLEL}" -eq 1 ]; then
     # Wait for all the jobs to finish
     sem --wait
+  fi
+
+  # Check to see if we found 0 keys
+  if [ "${#UPDATE_ARRAY[@]}" -eq 0 ]; then
+    echo "No keys were found to update between the source:[${SOURCE_ORG}] and destination:[${DESTINATION_ORG}]"
+    echo "No keys were found to update between the source:[${SOURCE_ORG}] and destination:[${DESTINATION_ORG}]" >> "${LOG_FILE}"
   fi
 }
 ################################################################################
