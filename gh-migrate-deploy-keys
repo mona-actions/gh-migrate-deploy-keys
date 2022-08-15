@@ -136,8 +136,10 @@ API_LIMIT_REMAINING_DESTINATION=0       # Number of API calls remaining before w
 SOURCE_REPO_ARRAY=()      # Array of source repo names
 DESTINATION_REPO_ARRAY=() # Array of destination repo names
 UPDATE_ARRAY=()           # Array of repos to update
-KEYS_CREATED=0            # Number of keys created
-KEYS_DELETED=0            # Number of keys deleted
+KEYS_CREATED_SUCCESS=0    # Number of keys created
+KEYS_CREATED_FAILURE=0    # Number of keys created
+KEYS_DELETED_SUCCESS=0    # Number of keys deleted
+KEYS_DELETED_FAILURE=0    # Number of keys deleted
 PARALLEL=0                # If we can run in parallel
 MAX_PARALLEL=6            # Maximum number of parallel processes to run
 
@@ -350,8 +352,11 @@ Footer() {
   echo "######################################################"
   echo "The script has completed"
   echo "######################################################"
-  echo "Total Deploy Keys Created:[${KEYS_CREATED}]"
-  echo "Total Deploy Keys Deleted:[${KEYS_DELETED}]"
+  echo "Total Deploy Keys Created Successfully:[${KEYS_CREATED_SUCCESS}]"
+  echo "Total Deploy Keys Deleted Successfully:[${KEYS_DELETED_SUCCESS}]"
+  echo ""
+  echo "Total Deploy Keys Created that Failed:[${KEYS_CREATED_FAILURE}]"
+  echo "Total Deploy Keys Deleted that Failed:[${KEYS_DELETED_FAILURE}]"
   echo ""
 }
 ################################################################################
@@ -784,8 +789,6 @@ DeleteKeyFromRepo() {
         echo "Successfully deleted key:[${KEY_TITLE}] from repo:[${REPO_NAME}]"
         echo "----------------------------------------------------"
       } >> "${LOG_FILE}"
-      # Increment the counter
-      KEYS_DELETED=$((KEYS_DELETED+1))
     fi
   fi
 }
@@ -905,8 +908,6 @@ AddKeyToRepo() {
         echo "Successfully added key:[${KEY_TITLE}] to repo:[${REPO_NAME}]"
         echo "----------------------------------------------------"
       } >> "${LOG_FILE}"
-      # Increment the counter
-      KEYS_CREATED=$((KEYS_CREATED+1))
     fi
   fi
 }
@@ -955,24 +956,16 @@ ReadInputFile() {
     #############################################
     # Split the line into the org and repo name #
     #############################################
-    ORG_REPO_NAME=$(echo "${LINE}" | tr '[:upper:]' '[:lower:]')
-    ORG_NAME=$SOURCE_ORG_NAME
-    REPO_NAME=$(echo "${ORG_REPO_NAME}" | cut -d'/' -f2 | cut -d',' -f1)
-    READ_ONLY=$(echo "${LINE}" | cut -d',' -f2)
-
-    # If READ_ONLY is not set, set it to true
-    if [[ -z "${READ_ONLY}" ]]; then
-      READ_ONLY=true
-    fi
+    REPO_NAME=$(echo "${LINE}" | tr '[:upper:]' '[:lower:]')
 
     # Debug info
-    Debug "ORG_REPO_NAME:[${ORG_REPO_NAME}]"
+    Debug "REPO_NAME:[${REPO_NAME}]"
 
     # Get the deploy keys with this repo
-    Debug "Getting deploy keys for repo:[${ORG_NAME}/${REPO_NAME}]"
+    Debug "Getting deploy keys for repo:[${SOURCE_ORG_NAME}/${REPO_NAME}]"
 
     # Create array of deploy keys returned from GetDeployKeysFromRepo
-    mapfile -t KEYS_ARRAY < <(GetDeployKeysFromRepo "${ORG_NAME}" "${REPO_NAME}")
+    mapfile -t KEYS_ARRAY < <(GetDeployKeysFromRepo "${SOURCE_ORG_NAME}" "${REPO_NAME}")
 
     # Check the api limit
     CheckAPILimitSource
@@ -981,9 +974,9 @@ ReadInputFile() {
     # Check if the array is empty
     if [ "${#KEYS_ARRAY[@]}" -eq 0 ]; then
       echo "----------------------------------------------------"
-      echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]"
+      echo "No deploy keys found for repo:[${SOURCE_ORG_NAME}/${REPO_NAME}]"
       {
-        echo "No deploy keys found for repo:[${ORG_NAME}/${REPO_NAME}]"
+        echo "No deploy keys found for repo:[${SOURCE_ORG_NAME}/${REPO_NAME}]"
         echo "----------------------------------------------------"
       } >> "${LOG_FILE}"
       exit 2
@@ -991,7 +984,7 @@ ReadInputFile() {
       # Count how many keys are in the array
       KEYS_COUNT="${#KEYS_ARRAY[@]}"
       # Check if more keys than api limit
-      if [ "${KEYS_COUNT}" -gt "${API_LIMIT}" ]; then
+      if [ "${KEYS_COUNT}" -gt "${API_LIMIT_REMAINING_DESTINATION}" ]; then
         echo "There are more keys:[${KEYS_COUNT}] than the API limit:[${API_LIMIT}]"
         echo "Please extend your API limit or create less keys"
         exit 1
@@ -1006,13 +999,13 @@ ReadInputFile() {
         # Check if parallel is true
         if [ "${PARALLEL}" == "true" ]; then
           Debug "running in parallel"
-          sem -j"${MAX_PARALLEL}" "./gh-migrate-deploy-keys-parallel.sh" "${ORG_NAME}" "${REPO_NAME}" "${SOURCE_TOKEN}" "${DESTINATION_ORG}" "${REPO_NAME}" "${DESTINATION_TOKEN}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}" "${LOG_FILE}" "${GITHUB_API_URL}"
+          sem -j"${MAX_PARALLEL}" "./gh-migrate-deploy-keys-parallel.sh" "${SOURCE_ORG_NAME}" "${REPO_NAME}" "${SOURCE_TOKEN}" "${DESTINATION_ORG}" "${REPO_NAME}" "${DESTINATION_TOKEN}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}" "${LOG_FILE}" "${GITHUB_API_URL}"
         else
           Debug "Deleting key from source repo"
-          DeleteKeyFromRepo "${ORG_NAME}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}"
+          DeleteKeyFromRepo "${SOURCE_ORG_NAME}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_ID}" "${KEY_VALUE}"
 
           # Add the key to the repo
-          Debug "Adding key:[${KEY_TITLE}] to repo:[${ORG_NAME}/${REPO_NAME}]"
+          Debug "Adding key:[${KEY_TITLE}] to repo:[${SOURCE_ORG_NAME}/${REPO_NAME}]"
           AddKeyToRepo "${DESTINATION_ORG}" "${REPO_NAME}" "${KEY_TITLE}" "${KEY_VALUE}"
         fi
       done
@@ -1091,6 +1084,33 @@ ParseUpdateArray() {
   if [ "${PARALLEL}" -eq 1 ]; then
     # Wait for all the jobs to finish
     sem --wait
+  fi
+}
+################################################################################
+#### Function UpdateKeyCounts ##################################################
+UpdateKeyCounts() {
+  # We need to parse the log file and get the number of keys added and deleted
+  # We also need to see if KEYS_CREATED_SUCCESS and KEYS_DELETED_SUCCESS are set and accurate
+  # Failed to delete key
+  # Successfully deleted key
+  #
+  # Failed to add key
+  # Successfully added key
+
+  # Check if the log file exists
+  if [ -f "${LOG_FILE}" ]; then
+    # Get the number of keys added
+    KEYS_CREATED_SUCCESS=$(grep -c "Successfully added key" "${LOG_FILE}")
+    # Get the number of keys added with failures
+    KEYS_CREATED_FAILURE=$(grep -c "Failed to add key" "${LOG_FILE}")
+    # Get the number of keys deleted
+    KEYS_DELETED_SUCCESS=$(grep -c "Successfully deleted key" "${LOG_FILE}")
+    # Get the number of keys deleted with failures
+    KEYS_DELETED_FAILURE=$(grep -c "Failed to delete key" "${LOG_FILE}")
+  else
+    # Failed to find log!
+    echo "Failed to find log file:[${LOG_FILE}]"
+    exit 1
   fi
 }
 ################################################################################
@@ -1316,6 +1336,11 @@ else
   ###############################################
   ParseUpdateArray
 fi
+
+#########################
+# Update the key counts #
+#########################
+UpdateKeyCounts
 
 ##########
 # Footer #
