@@ -20,15 +20,10 @@ You need to have the following to run this script successfully:
 
 The `input file` should be in the format:
 ```csv
-Org_Name/Repo_Name1,true
-Org_Name/Repo_Name2,false
-Org_Name/Repo_Name3
+Repo_Name1
+Repo_Name2
+Repo_Name3
 ```
-
-The format is: `Source_Org/Source_Repo,<Is the key READ only>`
-If you set the `Is the key READ only` to `true`, it will make the key with `READ_ONLY`
-If you set the `Is the key READ only` to `false`, it will make the key with `read/write`
-**Note:** if not passed it will default to `true` for `READ_ONLY`
 
 ## Usage
 
