@@ -824,7 +824,7 @@ GetDeployKeysFromRepo() {
   fi
 
   # Parse the deploy keys
-  mapfile -t KEYS < <(echo "${DEPLOY_KEYS}" | jq -r '.[] | .title + "|" + (.id|tostring) + "|" + .key + "|" + (.read_only|tostring)')
+  mapfile -t KEYS < <(echo "${DEPLOY_KEYS}" | jq -r '.[] | .title + "|" + (.id|tostring) + "|" + .key + "|" + (.read_only|tostring) + ";"')
 
   # Check if the array is empty
   if [ "${#KEYS[@]}" -eq 0 ]; then
@@ -963,10 +963,16 @@ ReadInputFile() {
     # Get the deploy keys with this repo
     Debug "Getting deploy keys for repo:[${SOURCE_ORG_NAME}/${REPO_NAME}]"
 
-    # Create array of deploy keys returned from GetDeployKeysFromRepo
-    mapfile -t KEYS_ARRAY < <(GetDeployKeysFromRepo "${SOURCE_ORG_NAME}" "${REPO_NAME}")
+    # Create string of deploy keys
+    DEPLOY_KEYS_STRING=$(GetDeployKeysFromRepo "${SOURCE_ORG_NAME}" "${REPO_NAME}")
 
-    Debug "KEYS_ARRAY:[${KEYS_ARRAY[*]}]"
+    # Split the DEPLOY_KEYS_STRING on ";" into array
+    IFS=';' read -ra KEYS_ARRAY <<< "${DEPLOY_KEYS_STRING}"
+
+    Debug "KEYS_ARRAY:"
+    for KEY in "${KEYS_ARRAY[@]}"; do
+      Debug "KEY:[${KEY}]"
+    done
     # Check the api limit
     CheckAPILimitSource
     CheckAPILimitDestination
@@ -991,11 +997,11 @@ ReadInputFile() {
       fi
       # Loop through the array and add the keys
       for KEY in "${KEYS_ARRAY[@]}"; do
-        # Split the key into the title and value
-        KEY_TITLE=$(echo "${KEY}" | cut -d'|' -f1)
-        KEY_ID=$(echo "${KEY}" | cut -d'|' -f2)
-        KEY_VALUE=$(echo "${KEY}" | cut -d'|' -f3)
-        KEY_READ_ONLY=$(echo "${KEY}" | cut -d'|' -f4)
+        # Split the key into the title and value and remove leading and trailing whitespace
+        KEY_TITLE=$(echo "${KEY}" | cut -d'|' -f1 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        KEY_ID=$(echo "${KEY}" | cut -d'|' -f2 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        KEY_VALUE=$(echo "${KEY}" | cut -d'|' -f3 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        KEY_READ_ONLY=$(echo "${KEY}" | cut -d'|' -f4 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
        
         # Check if parallel is true
         if [ "${PARALLEL}" == "true" ]; then
