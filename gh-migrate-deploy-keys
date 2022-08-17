@@ -985,7 +985,6 @@ ReadInputFile() {
         echo "No deploy keys found for repo:[${SOURCE_ORG_NAME}/${REPO_NAME}]"
         echo "----------------------------------------------------"
       } >> "${LOG_FILE}"
-      exit 2
     else
       # Count how many keys are in the array
       KEYS_COUNT="${#KEYS_ARRAY[@]}"
